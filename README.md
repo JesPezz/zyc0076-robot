@@ -106,6 +106,17 @@ Anota aqui **la SSID/clave reales** que le flasheaste si vas a usar WiFi:
 SSID: ______      Clave: ______
 ```
 
+## Firmware del ESP32-CAM
+
+En `esp32cam/` esta el firmware propio que corre en el ESP32-CAM (ESP-IDF 5.5 +
+Arduino + Bluepad32): actua de **puente Bluetooth** (mando FF01) -> UART 115200
+`0xA5 <orden> 0x5A` hacia el UNO, y expone WiFi/OTA (host `zyc0076`).
+
+```bash
+pio run -e esp32cam            # compilar
+pio run -e esp32cam -t upload  # flashear por USB-serial (COM5, CH340)
+```
+
 ## Problemas conocidos / notas
 
 - **WSL no expone COM4**: usar el Python de Windows
