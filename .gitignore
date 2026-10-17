@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+arduino/**/build/
+tools/*.exe
