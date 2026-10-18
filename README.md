@@ -99,23 +99,8 @@ downright ccw cw model1..4 servo-left servo-right servo-center` (+ por HTTP
 /counterclockwise /clockwise /model1 /model2 /model3 /model4 /motorleft
 /motorright /motorcenter /ledon /ledoff /` y el stream en `:81/stream`.
 
-El firmware del ESP32 viene configurado para unirse a una red WiFi (`STA`).
-Anota aqui **la SSID/clave reales** que le flasheaste si vas a usar WiFi:
-
-```
-SSID: ______      Clave: ______
-```
-
-## Firmware del ESP32-CAM
-
-En `esp32cam/` esta el firmware propio que corre en el ESP32-CAM (ESP-IDF 5.5 +
-Arduino + Bluepad32): actua de **puente Bluetooth** (mando FF01) -> UART 115200
-`0xA5 <orden> 0x5A` hacia el UNO, y expone WiFi/OTA (host `zyc0076`).
-
-```bash
-pio run -e esp32cam            # compilar
-pio run -e esp32cam -t upload  # flashear por USB-serial (COM5, CH340)
-```
+El firmware del ESP32-CAM (carpeta `esp32cam/`) se une a la red WiFi en modo
+`STA`. Red usada: `INFINITUM181E` (la clave no se incluye en este repo publico).
 
 ## Problemas conocidos / notas
 
@@ -126,3 +111,40 @@ pio run -e esp32cam -t upload  # flashear por USB-serial (COM5, CH340)
   ESP32 **v1.0.6** (la v3.2.0 da problemas). Firmware alternativo en
   `github.com/FroGPipA/ESP32-Car`.
 - **Un solo cable USB** es suficiente (va al UNO).
+
+## Mando Bluetooth (Funlab FF01) sin PC
+
+El ESP32-CAM hace de **host Bluetooth** (Bluepad32), no el PC, asi que el robot
+se maneja solo con el mando:
+
+```
+mando FF01 --Bluetooth--> ESP32-CAM --UART--> UNO R3 --> motores
+```
+
+Emparejar la primera vez:
+
+1. Robot encendido (pilas + switch ON).
+2. En Windows, **olvidar/quitar** el mando de Bluetooth (el mando recuerda un
+   unico host; si esta emparejado al PC no se conecta al robot).
+3. En el mando, mantener **B + HOME** ~3 s hasta que parpadeen los LED 1 y 4.
+4. El ESP32-CAM lo empareja solo.
+
+Mapeo: stick izquierdo = avanzar/retroceder y girar, stick derecho = lateral
+(mecanum), A = frenar, B = model1 (manual), X = model2, Y = model3,
+LT = model4, LB/RB = servo izquierda/derecha, RT = servo al centro.
+Los botones de modelo desactivan los sticks hasta pulsar B (manual).
+
+## Firmware del ESP32-CAM (carpeta `esp32cam/`)
+
+Firmware del ESP32-CAM = puente Bluetooth + servidor OTA. Como compilarlo y
+flashearlo por cable la primera vez esta en `esp32cam/README.md`.
+
+**Actualizar por WiFi (OTA)** — sin cable y sin botones:
+
+```bash
+curl -F firmware=@fw/firmware.bin http://<ip-del-esp32>/update
+```
+
+El ESP32 responde `200`, se reinicia y arranca la version nueva. La IP la da el
+DHCP; el `hostname` es `zyc0076`. El modo descarga manual (BOOT + RESET) solo se
+necesita para el **primer** flasheo por USB, no para las actualizaciones.

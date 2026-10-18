@@ -6,6 +6,8 @@
 #include <Bluepad32.h>
 #include <WiFi.h>
 #include <ArduinoOTA.h>
+#include <WebServer.h>
+#include <Update.h>
 
 // ---------------------------------------------------------------- enlace UNO
 #define UNO_HDR 0xA5
@@ -108,6 +110,32 @@ static void otaBegin() {
     ArduinoOTA.begin();
 }
 
+// ------------------------------------------------------------ OTA por HTTP
+// El PC sube el binario al ESP32 (POST /update). No requiere conexion entrante.
+static WebServer httpServer(80);
+
+static void httpUpdateDone() {
+    httpServer.send(200, "text/plain", Update.hasError() ? "FAIL" : "OK");
+    delay(300);
+    ESP.restart();
+}
+
+static void httpUpdateUpload() {
+    HTTPUpload& up = httpServer.upload();
+    if (up.status == UPLOAD_FILE_START) {
+        if (!Update.begin(UPDATE_SIZE_UNKNOWN)) Update.printError(Serial);
+    } else if (up.status == UPLOAD_FILE_WRITE) {
+        if (Update.write(up.buf, up.currentSize) != up.currentSize) Update.printError(Serial);
+    } else if (up.status == UPLOAD_FILE_END) {
+        if (!Update.end(true)) Update.printError(Serial);
+    }
+}
+
+static void httpOtaBegin() {
+    httpServer.on("/update", HTTP_POST, httpUpdateDone, httpUpdateUpload);
+    httpServer.begin();
+}
+
 // --------------------------------------------------------------- arduino api
 void setup() {
     Serial.begin(115200);
@@ -118,13 +146,13 @@ void setup() {
     BP32.enableBLEService(false);
 
     wifiConnect();
-    if (WiFi.status() == WL_CONNECTED) otaBegin();
+    if (WiFi.status() == WL_CONNECTED) { otaBegin(); httpOtaBegin(); }
 }
 
 void loop() {
     if (BP32.update()) processControllers();
 
-    if (WiFi.status() == WL_CONNECTED) ArduinoOTA.handle();
+    if (WiFi.status() == WL_CONNECTED) { ArduinoOTA.handle(); httpServer.handleClient(); }
 
     // reafirma la ultima orden (el UNO la mantiene en bucle)
     static unsigned long last = 0;
