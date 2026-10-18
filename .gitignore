@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 arduino/**/build/
 tools/*.exe
+esp32cam/cap.txt
+app/*.apk
+app/build/
