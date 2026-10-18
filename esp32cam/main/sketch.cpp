@@ -352,7 +352,9 @@ static void handleCtrl() {
 }
 
 static void handleRoot() {
-    uiServer.send_P(200, "text/html", PAGE_HTML);
+    String html = FPSTR(PAGE_HTML);
+    html.replace("%V%", FW_VERSION);  // la pagina muestra v1.4, v1.5, ...
+    uiServer.send(200, "text/html", html);
 }
 
 // Iluminacion: /ledon y /ledoff (GET). Los mismos nombres que ya usaba robot.py.
