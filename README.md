@@ -98,6 +98,8 @@ downright ccw cw model1..4 servo-left servo-right servo-center` (+ por HTTP
 `/` sirve la página de control y `/c?o=<orden>` envía una orden (el UNO la
 mantiene hasta que llega otra); el stream MJPEG está en `:81/stream`. Las
 órdenes son los mismos valores del protocolo del kit (`0`=stop, `92`=avanzar…).
+`/ledon` y `/ledoff` (GET) encienden y apagan el LED de iluminación (GPIO 4);
+arranca encendido.
 
 El firmware del ESP32-CAM (carpeta `esp32cam/`) se une a la red WiFi en modo
 `STA`. Red usada: `INFINITUM181E` (la clave no se incluye en este repo publico).

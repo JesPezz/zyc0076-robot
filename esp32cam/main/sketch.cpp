@@ -126,6 +126,7 @@ void processControllers() {
 #define VSYNC_GPIO_NUM  25
 #define HREF_GPIO_NUM   23
 #define PCLK_GPIO_NUM   22
+#define LED_PIN          4  // flash/iluminacion del ESP32-CAM, activo en HIGH
 
 #define PART_BOUNDARY "123456789000000000000987654321"
 
@@ -224,7 +225,7 @@ static void otaBegin() {
 // Al arrancar se consulta el ultimo release de GitHub; si su tag es mayor que
 // FW_VERSION se descarga el asset GH_ASSET y se flashea. No hace falta cable ni
 // subir nada al dispositivo: basta publicar un release nuevo.
-#define FW_VERSION "1.1"
+#define FW_VERSION "1.2"
 #define GH_REPO "JesPezz/zyc0076-robot"
 #define GH_ASSET "firmware.bin"
 
@@ -351,6 +352,13 @@ static void handleRoot() {
     uiServer.send_P(200, "text/html", PAGE_HTML);
 }
 
+// Iluminacion: /ledon y /ledoff (GET). Los mismos nombres que ya usaba robot.py.
+static void handleLed() {
+    bool on = uiServer.uri() == "/ledon";
+    digitalWrite(LED_PIN, on ? HIGH : LOW);
+    uiServer.send(200, "text/plain", "ok");
+}
+
 // OTA manual: el PC sube el binario con `curl -F firmware=@firmware.bin /update`.
 static void httpUpdateDone() {
     uiServer.send(200, "text/plain", Update.hasError() ? "FAIL" : "OK");
@@ -372,6 +380,8 @@ static void httpUpdateUpload() {
 static void httpBegin() {
     uiServer.on("/", HTTP_GET, handleRoot);
     uiServer.on("/c", HTTP_GET, handleCtrl);
+    uiServer.on("/ledon", HTTP_GET, handleLed);
+    uiServer.on("/ledoff", HTTP_GET, handleLed);
     uiServer.on("/update", HTTP_POST, httpUpdateDone, httpUpdateUpload);
     uiServer.begin();
 }
@@ -379,6 +389,8 @@ static void httpBegin() {
 // --------------------------------------------------------------- arduino api
 void setup() {
     Serial.begin(115200);
+    pinMode(LED_PIN, OUTPUT);
+    digitalWrite(LED_PIN, HIGH);
     unoSend(O_STOP);
 
     BP32.setup(&onConnectedController, &onDisconnectedController);
