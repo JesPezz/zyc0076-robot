@@ -14,6 +14,7 @@
 #include "esp_camera.h"
 #include "img_converters.h"
 #include "driver/ledc.h"
+#include "esp_sleep.h"
 #include "web.h"
 
 // ---------------------------------------------------------------- enlace UNO
@@ -225,7 +226,7 @@ static void otaBegin() {
 // Al arrancar se consulta el ultimo release de GitHub; si su tag es mayor que
 // FW_VERSION se descarga el asset GH_ASSET y se flashea. No hace falta cable ni
 // subir nada al dispositivo: basta publicar un release nuevo.
-#define FW_VERSION "1.2"
+#define FW_VERSION "1.3"
 #define GH_REPO "JesPezz/zyc0076-robot"
 #define GH_ASSET "firmware.bin"
 
@@ -359,6 +360,26 @@ static void handleLed() {
     uiServer.send(200, "text/plain", "ok");
 }
 
+// Reposo: /sleep?m=N para los motores y duerme el ESP32 N minutos (1..180, 10 por
+// defecto). Al agotarse el temporizador reinicia solo: WiFi, camara y OTA ya van en
+// setup(). Mientras duerme no responde: el deep sleep apaga la radio.
+static void handleSleep() {
+    int m = uiServer.hasArg("m") ? uiServer.arg("m").toInt() : 10;
+    if (m < 1) m = 1;
+    if (m > 180) m = 180;
+    unoOrder(O_STOP);   // que el UNO no se quede con la ultima marcha
+    delay(50);
+    unoSend(O_STOP);
+    digitalWrite(LED_PIN, LOW);
+    char msg[24];
+    snprintf(msg, sizeof(msg), "durmiendo %d min", m);
+    uiServer.send(200, "text/plain", msg);
+    uiServer.client().flush();
+    delay(300);         // que salga la respuesta antes de apagar
+    esp_sleep_enable_timer_wakeup((uint64_t)m * 60ULL * 1000000ULL);
+    esp_deep_sleep_start();
+}
+
 // OTA manual: el PC sube el binario con `curl -F firmware=@firmware.bin /update`.
 static void httpUpdateDone() {
     uiServer.send(200, "text/plain", Update.hasError() ? "FAIL" : "OK");
@@ -382,6 +403,7 @@ static void httpBegin() {
     uiServer.on("/c", HTTP_GET, handleCtrl);
     uiServer.on("/ledon", HTTP_GET, handleLed);
     uiServer.on("/ledoff", HTTP_GET, handleLed);
+    uiServer.on("/sleep", HTTP_GET, handleSleep);
     uiServer.on("/update", HTTP_POST, httpUpdateDone, httpUpdateUpload);
     uiServer.begin();
 }

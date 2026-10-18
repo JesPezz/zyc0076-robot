@@ -17,6 +17,7 @@ html,body{margin:0;height:100%;background:#101214;color:#eee;font:14px system-ui
 #cl{position:absolute;bottom:8px;right:8px;padding:10px 14px;border:0;border-radius:8px;background:#2a7;color:#041;font-weight:700}
 #led{position:absolute;bottom:8px;left:8px;padding:10px 14px;border:0;border-radius:8px;background:#31373b;color:#eee;font-weight:700}
 #led.on{background:#fc3;color:#420}
+#slp{position:absolute;top:6px;right:8px;padding:10px 14px;border:0;border-radius:8px;background:#31373b;color:#eee;font-weight:700}
 #ctl{flex:1;display:flex;align-items:center;justify-content:space-between;padding:10px 14px;gap:8px}
 .stick{position:relative;width:126px;height:126px;border-radius:50%;background:radial-gradient(#232629,#171a1c);border:2px solid #33383c}
 .knob{position:absolute;left:50%;top:50%;width:52px;height:52px;margin:-26px 0 0 -26px;border-radius:50%;background:#3b4145;border:2px solid #565e63}
@@ -32,6 +33,7 @@ html,body{margin:0;height:100%;background:#101214;color:#eee;font:14px system-ui
     <img id=v alt="">
     <div id=hud>camara apagada</div>
     <button id=led class=on>LUZ ON</button>
+    <button id=slp>REPOSO</button>
     <button id=cl>CAMARA ON</button>
   </div>
   <div id=ctl>
@@ -96,6 +98,11 @@ led.addEventListener('click',function(){
   fetch('/led'+(ledOn?'on':'off'),{cache:'no-store'})['catch'](function(){});
   led.textContent=ledOn?'LUZ ON':'LUZ OFF';
   led.className=ledOn?'on':'';
+});
+document.getElementById('slp').addEventListener('click',function(){
+  if(!confirm('Dormir 10 minutos? La camara se apaga.'))return;
+  hud.textContent='durmiendo...';v.src='';
+  fetch('/sleep?m=10',{cache:'no-store'})['catch'](function(){});
 });
 v.onload=function(){hud.textContent='camara ok';};
 v.onerror=function(){hud.textContent='error de camara';};
