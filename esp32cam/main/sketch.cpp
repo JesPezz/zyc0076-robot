@@ -168,6 +168,7 @@ static bool cameraInit() {
 
 static void streamHandler() {
     WiFiClient client = camServer.client();
+    client.setNoDelay(true);
     client.print(F("HTTP/1.1 200 OK\r\n"
                    "Access-Control-Allow-Origin: *\r\n"
                    "Content-Type: multipart/x-mixed-replace; boundary=" PART_BOUNDARY "\r\n\r\n"));
@@ -176,7 +177,7 @@ static void streamHandler() {
         if (!fb) break;
         uint8_t* jpg = nullptr;
         size_t len = 0;
-        bool ok = frame2jpg(fb, 12, &jpg, &len);  // JPEG por software (RGB565)
+        bool ok = frame2jpg(fb, 16, &jpg, &len);  // JPEG por software (RGB565); q16 = frames ~30% menores
         esp_camera_fb_return(fb);
         if (!ok) break;
         client.printf("--%s\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n",
@@ -207,6 +208,7 @@ static void camBegin() {
 // ----------------------------------------------------------------- wifi/ota
 static void wifiConnect() {
     WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);  // modem sleep anade ~100 ms de latencia al stream MJPEG
     for (const auto& n : NETS) {
         WiFi.begin(n.ssid, n.pass);
         unsigned long t0 = millis();
@@ -226,7 +228,7 @@ static void otaBegin() {
 // Al arrancar se consulta el ultimo release de GitHub; si su tag es mayor que
 // FW_VERSION se descarga el asset GH_ASSET y se flashea. No hace falta cable ni
 // subir nada al dispositivo: basta publicar un release nuevo.
-#define FW_VERSION "1.3"
+#define FW_VERSION "1.4"
 #define GH_REPO "JesPezz/zyc0076-robot"
 #define GH_ASSET "firmware.bin"
 
