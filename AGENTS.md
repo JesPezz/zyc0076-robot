@@ -41,6 +41,12 @@ También `esp32cam/sdkconfig.esp32cam` si se tocó (garantiza misma config).
 1. Compilar → `esp32cam/fw/firmware.bin` (copiar de vuelta desde PCHOME
    `.pio\build\esp32cam\firmware.bin` si se compiló allí).
 2. Verificar `#define FW_VERSION "X.Y"` en `esp32cam/main/sketch.cpp` = tag del release.
+2b. **El binario debe pesar MENOS de 1.572.864 B** (slot ota_0 = `0x180000` = 1,5 MB).
+   Si se pasa: el OTA falla siempre y el flash por cable desborda sobre `ota_1`
+   (pasó con v1.4 = 1.579.488 B → robot en bucle, sin WiFi). Lo que lo mantiene
+   a raya está ya en `sdkconfig.defaults`: `CONFIG_LOG_DEFAULT_LEVEL_NONE`,
+   bundle de certificados a 3 y solo las curvas ECP de GitHub/Let's Encrypt.
+   Comprobar el tamaño en el log del build (`Flash ...%`) o con `ls -l`.
 3. Publicar en WSL con gh (`~/.local/bin/gh`, autenticado como JesPezz):
 
    ```
