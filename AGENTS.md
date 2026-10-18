@@ -41,12 +41,8 @@ También `esp32cam/sdkconfig.esp32cam` si se tocó (garantiza misma config).
 1. Compilar → `esp32cam/fw/firmware.bin` (copiar de vuelta desde PCHOME
    `.pio\build\esp32cam\firmware.bin` si se compiló allí).
 2. Verificar `#define FW_VERSION "X.Y"` en `esp32cam/main/sketch.cpp` = tag del release.
-2b. **El binario debe pesar MENOS de 1.572.864 B** (slot ota_0 = `0x180000` = 1,5 MB).
-   Si se pasa: el OTA falla siempre y el flash por cable desborda sobre `ota_1`
-   (pasó con v1.4 = 1.579.488 B → robot en bucle, sin WiFi). Lo que lo mantiene
-   a raya está ya en `sdkconfig.defaults`: `CONFIG_LOG_DEFAULT_LEVEL_NONE`,
-   bundle de certificados a 3 y solo las curvas ECP de GitHub/Let's Encrypt.
-   Comprobar el tamaño en el log del build (`Flash ...%`) o con `ls -l`.
+2b. **Tamaño**: el binario NUNCA puede pasar de 1.572.864 B (ver «Tamaño máximo
+   del firmware» más abajo y comprobarlo antes de publicar).
 3. Publicar en WSL con gh (`~/.local/bin/gh`, autenticado como JesPezz):
 
    ```
@@ -57,6 +53,29 @@ También `esp32cam/sdkconfig.esp32cam` si se tocó (garantiza misma config).
 4. **NUNCA `--prerelease`**: el OTA consulta `releases/latest` y excluye prereleases.
 5. El asset debe llamarse **exactamente** `firmware.bin` (el OTA lo busca por nombre).
    Si salió prerelease: `gh release edit vX.Y --prerelease=false`.
+
+## Tamaño máximo del firmware (REGLA DURA)
+
+El binario NUNCA puede pasar de **1.572.864 B** = 1,5 MB = slot `ota_0` (`0x180000`).
+
+- **Por qué**: si se pasa, la OTA falla SIEMPRE (`Update` no cabe en la partición) y
+  el flasheo por cable escribe 6,5 KB de más sobre la cabecera de `ota_1` → el
+  bootloader no puede arrancar ninguna de las dos particiones y el robot queda en
+  bucle, sin WiFi y sin forma de recuperarlo por aire. Pasó con **v1.4 = 1.579.488 B**.
+- **Comprobar SIEMPRE antes de publicar** (sale con exit≠0 si se pasa):
+
+  ```
+  python3 -c "import os,sys;s=os.path.getsize('esp32cam/fw/firmware.bin');sys.exit(f'FUERA DE SLOT: {s} B' if s>1572864 else 0)" && echo CABE
+  ```
+
+- **Si se pasa, recortar** (esto ya está aplicado en `sdkconfig.defaults`, no quitarlo):
+  `CONFIG_LOG_DEFAULT_LEVEL_NONE` + `CONFIG_LOG_MAXIMUM_LEVEL=0` +
+  `CONFIG_BOOTLOADER_LOG_LEVEL_NONE` (≈ -82 KB), `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_MAX_CERTS=3`,
+  `CONFIG_MBEDTLS_ERROR_STRINGS=n` y las curvas ECP sobrantes a `n` (dejar solo
+  `SECP256R1` y `CURVE25519`, que son las que usan GitHub y Let's Encrypt).
+  Cuidado: `sdkconfig.esp32cam` ya generado NO se re-genera solo — hay que
+  parchearlo también o el recorte no entra en el build.
+- **Referencia**: v1.5 = 1.488.688 B (84 KB de margen). v1.3 = 1.497.712 B.
 
 ## Último recurso: compilar en el portátil
 
