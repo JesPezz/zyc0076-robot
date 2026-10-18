@@ -12,6 +12,7 @@
 #include <HTTPClient.h>
 #include <Update.h>
 #include "esp_camera.h"
+#include "img_converters.h"
 #include "driver/ledc.h"
 #include "web.h"
 
@@ -128,8 +129,10 @@ void processControllers() {
 
 #define PART_BOUNDARY "123456789000000000000987654321"
 
-static WebServer uiServer(80);   // pagina + control
+static WebServer uiServer(80);   // pagina + control + OTA
 static WebServer camServer(81);  // solo el stream MJPEG
+
+static bool g_camOk = false;
 
 static bool cameraInit() {
     camera_config_t c = {};
@@ -152,7 +155,7 @@ static bool cameraInit() {
     c.pin_href = HREF_GPIO_NUM;
     c.pin_pclk = PCLK_GPIO_NUM;
     c.xclk_freq_hz = 20000000;
-    c.pixel_format = PIXFORMAT_JPEG;
+    c.pixel_format = PIXFORMAT_RGB565;  // el sensor GC2145 no tiene JPEG por hardware
     c.frame_size = FRAMESIZE_QVGA;   // 320x240: poco ancho de banda
     c.jpeg_quality = 12;
     c.fb_count = 2;
@@ -169,19 +172,28 @@ static void streamHandler() {
     while (client.connected()) {
         camera_fb_t* fb = esp_camera_fb_get();
         if (!fb) break;
-        client.printf("--%s\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n",
-                      PART_BOUNDARY, (unsigned)fb->len);
-        client.write(fb->buf, fb->len);
-        client.print("\r\n");
+        uint8_t* jpg = nullptr;
+        size_t len = 0;
+        bool ok = frame2jpg(fb, 12, &jpg, &len);  // JPEG por software (RGB565)
         esp_camera_fb_return(fb);
+        if (!ok) break;
+        client.printf("--%s\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n",
+                      PART_BOUNDARY, (unsigned)len);
+        client.write(jpg, len);
+        client.print("\r\n");
+        free(jpg);
         if (!client.connected()) break;
-        if (BP32.update()) processControllers();  // el mando sigue vivo mientras streamea
+        delay(1);
     }
     client.stop();
 }
 
 static void camTask(void*) {
-    for (;;) { camServer.handleClient(); delay(2); }
+    for (;;) {
+        // sin WiFi no hay lwip: handleClient() antes de tcpip_init dispara un assert
+        if (WiFi.status() == WL_CONNECTED) camServer.handleClient();
+        delay(2);
+    }
 }
 
 static void camBegin() {
@@ -212,7 +224,7 @@ static void otaBegin() {
 // Al arrancar se consulta el ultimo release de GitHub; si su tag es mayor que
 // FW_VERSION se descarga el asset GH_ASSET y se flashea. No hace falta cable ni
 // subir nada al dispositivo: basta publicar un release nuevo.
-#define FW_VERSION "1.0"
+#define FW_VERSION "1.1"
 #define GH_REPO "JesPezz/zyc0076-robot"
 #define GH_ASSET "firmware.bin"
 
@@ -312,7 +324,7 @@ static void otaDesdeRelease() {
     }
 }
 
-// ------------------------------------------- control por WiFi
+// ----------------------------------- control por WiFi + OTA manual por HTTP
 static bool validOrder(int o) {
     switch (o) {
         case O_STOP: case O_FWD: case O_BACK: case O_LEFT: case O_RIGHT:
@@ -339,9 +351,28 @@ static void handleRoot() {
     uiServer.send_P(200, "text/html", PAGE_HTML);
 }
 
+// OTA manual: el PC sube el binario con `curl -F firmware=@firmware.bin /update`.
+static void httpUpdateDone() {
+    uiServer.send(200, "text/plain", Update.hasError() ? "FAIL" : "OK");
+    delay(300);
+    ESP.restart();
+}
+
+static void httpUpdateUpload() {
+    HTTPUpload& up = uiServer.upload();
+    if (up.status == UPLOAD_FILE_START) {
+        if (!Update.begin(UPDATE_SIZE_UNKNOWN)) Update.printError(Serial);
+    } else if (up.status == UPLOAD_FILE_WRITE) {
+        if (Update.write(up.buf, up.currentSize) != up.currentSize) Update.printError(Serial);
+    } else if (up.status == UPLOAD_FILE_END) {
+        if (!Update.end(true)) Update.printError(Serial);
+    }
+}
+
 static void httpBegin() {
     uiServer.on("/", HTTP_GET, handleRoot);
     uiServer.on("/c", HTTP_GET, handleCtrl);
+    uiServer.on("/update", HTTP_POST, httpUpdateDone, httpUpdateUpload);
     uiServer.begin();
 }
 
@@ -350,14 +381,13 @@ void setup() {
     Serial.begin(115200);
     unoSend(O_STOP);
 
-    cameraInit();
-    camBegin();
-
     BP32.setup(&onConnectedController, &onDisconnectedController);
     BP32.enableVirtualDevice(false);
     BP32.enableBLEService(false);
 
-    wifiConnect();
+    wifiConnect();  // primero la red: lwip debe estar listo antes de la tarea de la camara
+    g_camOk = cameraInit();
+    if (g_camOk) camBegin();
     if (WiFi.status() == WL_CONNECTED) {
         otaBegin();
         httpBegin();
