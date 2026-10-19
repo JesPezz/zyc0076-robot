@@ -6,3 +6,6 @@ esp32cam/cap.txt
 app/*.apk
 !app/robot.apk
 app/build/
+# La clave de firma NO se versiona (repo publico): vive en PCHOME y en
+# Nextcloud > Escritorio > zyc0076-keys
+app/key.jks

@@ -77,6 +77,22 @@ El binario NUNCA puede pasar de **1.572.864 B** = 1,5 MB = slot `ota_0` (`0x1800
   parchearlo también o el recorte no entra en el build.
 - **Referencia**: v1.5 = 1.488.688 B (84 KB de margen). v1.3 = 1.497.712 B.
 
+## App Android (APK) — se actualiza a sí misma
+
+- Compilar en PCHOME: `cd /d C:\Users\jespe\Desktop\chuyito\robot\app && build_apk.bat`
+  (aapt2 + javac + d8 + zipalign + apksigner, sin Gradle) → `app/robot.apk`.
+- **La clave de firma NO se versiona** (el repo es público). Vive en PCHOME
+  (`app/key.jks`) y en Nextcloud › Escritorio › `zyc0076-keys/app-key.jks`
+  (alias `k`, storepass/keypass `android`, dname `CN=zyc0076`). Copiarla a
+  `app/key.jks` antes de compilar: `build_apk.bat` solo la genera si NO existe,
+  y un APK con otra clave no se puede instalar encima (habría que desinstalar).
+- Publicar versión nueva: subir `versionCode` y `versionName` en
+  `app/AndroidManifest.xml`, compilar, copiar `robot.apk` al repo y commitear
+  (el APK SÍ se versiona). La app se actualiza sola bajando
+  `raw.githubusercontent.com/JesPezz/zyc0076-robot/main/app/robot.apk` y
+  comparando el `versionName` del APK bajado con el instalado.
+- La clave antigua (la que se commiteó por error) está **quemada**: no usarla.
+
 ## Último recurso: compilar en el portátil
 
 Solo si PCHOME no está disponible (WOL falla). Desde `workdir esp32cam/`:
