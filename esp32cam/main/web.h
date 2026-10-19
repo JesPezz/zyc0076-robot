@@ -34,7 +34,7 @@ html,body{margin:0;height:100%;background:#101214;color:#eee;font:14px system-ui
     <img id=v alt="">
     <div id=hud>camara apagada</div>
     <div id=ver>v%V%</div>
-    <button id=led class=on>LUZ ON</button>
+    <button id=led>LUZ OFF</button>
     <button id=slp>REPOSO</button>
     <button id=cl>CAMARA ON</button>
   </div>
@@ -94,7 +94,7 @@ document.getElementById('cl').addEventListener('click',function(){
   hud.textContent='conectando...';
   v.src='http://'+location.hostname+':81/stream?t='+Date.now();
 });
-var led=document.getElementById('led'),ledOn=true;
+var led=document.getElementById('led'),ledOn=false;
 led.addEventListener('click',function(){
   ledOn=!ledOn;
   fetch('/led'+(ledOn?'on':'off'),{cache:'no-store'})['catch'](function(){});

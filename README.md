@@ -99,7 +99,7 @@ downright ccw cw model1..4 servo-left servo-right servo-center` (+ por HTTP
 mantiene hasta que llega otra); el stream MJPEG está en `:81/stream`. Las
 órdenes son los mismos valores del protocolo del kit (`0`=stop, `92`=avanzar…).
 `/ledon` y `/ledoff` (GET) encienden y apagan el LED de iluminación (GPIO 4);
-arranca encendido. `/sleep?m=N` (GET, 1–180 min, 10 por defecto) para los motores
+arranca apagado. `/sleep?m=N` (GET, 1–180 min, 10 por defecto) para los motores
 y duerme el ESP32 en *deep sleep*: la radio se apaga, así que **mientras duerme no
 responde** y solo vuelve al agotarse el temporizador (reinicia y reconecta solo).
 El UNO nunca duerme: mantiene la última orden, por eso `/sleep` manda `stop` antes.

@@ -228,7 +228,7 @@ static void otaBegin() {
 // Al arrancar se consulta el ultimo release de GitHub; si su tag es mayor que
 // FW_VERSION se descarga el asset GH_ASSET y se flashea. No hace falta cable ni
 // subir nada al dispositivo: basta publicar un release nuevo.
-#define FW_VERSION "1.5"
+#define FW_VERSION "1.7"
 #define GH_REPO "JesPezz/zyc0076-robot"
 #define GH_ASSET "firmware.bin"
 
@@ -384,6 +384,60 @@ static void handleSleep() {
     esp_deep_sleep_start();
 }
 
+// Programar el UNO por WiFi (Fase 3): para entrar a su bootloader hay que pulsar su
+// RESET, y el escudo puede o no llevar esa linea. Solo el bootloader (optiboot)
+// contesta al sync STK500 con 0x14 0x10, asi que probar los GPIO libres es concluyente.
+static const uint8_t RST_CAND[] = {12, 13, 14, 15, 2};
+
+static bool bootloaderSync(uint8_t pin, int* ms) {
+    pinMode(pin, OUTPUT);
+    digitalWrite(pin, LOW);
+    delay(50);                                  // pulso de RESET
+    pinMode(pin, INPUT);                        // se suelta: el pull-up del UNO lo sube
+    while (Serial.available()) Serial.read();   // tira lo que quede en la linea
+    Serial.write(0x30); Serial.write(0x20);     // STK_GET_SYNC
+    Serial.flush();
+    unsigned long t0 = millis();
+    int st = 0;
+    while (millis() - t0 < 600) {
+        if (!Serial.available()) { delay(1); continue; }
+        uint8_t b = Serial.read();
+        if (b == 0x14) st = 1;                  // INSYNC
+        else if (st == 1 && b == 0x10) { *ms = (int)(millis() - t0); return true; }
+        else st = 0;
+    }
+    return false;
+}
+
+// GET /unoprobe -> que GPIO (si alguno) resetea el UNO
+static void handleUnoProbe() {
+    unoOrder(O_STOP);   // el UNO va a reiniciarse: que no quede marcha puesta
+    delay(50);
+    unoSend(O_STOP);
+    // El UNO imprime "order" por cada paquete que recibe y nosotros mandamos uno
+    // cada 200 ms: si aqui no llega nada, el ESP32 no esta oyendo al UNO y el
+    // resultado de abajo no seria fiable.
+    while (Serial.available()) Serial.read();
+    unsigned long t0 = millis();
+    unsigned rx = 0;
+    while (millis() - t0 < 500) {
+        if (Serial.available()) { Serial.read(); rx++; } else delay(1);
+    }
+    String res = "rx del UNO: " + String(rx) + " bytes en 500 ms\n";
+    res += "linea RESET del UNO:\n";
+    for (unsigned i = 0; i < sizeof(RST_CAND); i++) {
+        int ms = 0;
+        if (bootloaderSync(RST_CAND[i], &ms)) {
+            res += "GPIO" + String(RST_CAND[i]) + " SI (sync en " + String(ms) + " ms)\n";
+            uiServer.send(200, "text/plain", res);
+            return;
+        }
+        res += "GPIO" + String(RST_CAND[i]) + " no\n";
+    }
+    res += "NINGUNA (hace falta un cable GPIO->RESET del UNO)\n";
+    uiServer.send(200, "text/plain", res);
+}
+
 // OTA manual: el PC sube el binario con `curl -F firmware=@firmware.bin /update`.
 static void httpUpdateDone() {
     uiServer.send(200, "text/plain", Update.hasError() ? "FAIL" : "OK");
@@ -408,6 +462,7 @@ static void httpBegin() {
     uiServer.on("/ledon", HTTP_GET, handleLed);
     uiServer.on("/ledoff", HTTP_GET, handleLed);
     uiServer.on("/sleep", HTTP_GET, handleSleep);
+    uiServer.on("/unoprobe", HTTP_GET, handleUnoProbe);
     uiServer.on("/update", HTTP_POST, httpUpdateDone, httpUpdateUpload);
     uiServer.begin();
 }
@@ -416,7 +471,7 @@ static void httpBegin() {
 void setup() {
     Serial.begin(115200);
     pinMode(LED_PIN, OUTPUT);
-    digitalWrite(LED_PIN, HIGH);
+    digitalWrite(LED_PIN, LOW);  // arranca apagado: se enciende desde la pagina (LUZ)
     unoSend(O_STOP);
 
     BP32.setup(&onConnectedController, &onDisconnectedController);
