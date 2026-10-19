@@ -4,7 +4,7 @@ set PATH=%JAVA_HOME%\bin;%PATH%
 set SDK=C:\Android
 set BT=%SDK%\build-tools\34.0.0
 set PLAT=%SDK%\platforms\android-34\android.jar
-cd /d C:\Users\jespe\app
+cd /d "%~dp0"
 if exist build rmdir /s /q build
 mkdir build
 
@@ -12,7 +12,7 @@ echo [1/6] aapt2 link
 "%BT%\aapt2.exe" link -o build\base.apk -I "%PLAT%" --manifest AndroidManifest.xml --min-sdk-version 24 --target-sdk-version 34 || goto err
 
 echo [2/6] javac
-javac -source 1.8 -target 1.8 -bootclasspath "%PLAT%" -d build\classes src\com\jespezz\zyc0076\MainActivity.java || goto err
+javac -source 1.8 -target 1.8 -bootclasspath "%PLAT%" -d build\classes src\com\jespezz\zyc0076\*.java || goto err
 
 echo [3/6] d8
 call "%BT%\d8.bat" --lib "%PLAT%" --min-api 24 --output build build\classes\com\jespezz\zyc0076\*.class || goto err

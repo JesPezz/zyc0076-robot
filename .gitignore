@@ -4,4 +4,5 @@ arduino/**/build/
 tools/*.exe
 esp32cam/cap.txt
 app/*.apk
+!app/robot.apk
 app/build/
