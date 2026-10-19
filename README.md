@@ -116,6 +116,9 @@ El firmware del ESP32-CAM (carpeta `esp32cam/`) se une a la red WiFi en modo
   ESP32 **v1.0.6** (la v3.2.0 da problemas). Firmware alternativo en
   `github.com/FroGPipA/ESP32-Car`.
 - **Un solo cable USB** es suficiente (va al UNO).
+- **Hallazgos completos**: causas raiz de cada fallo, la camara GC2145, reglas de
+  build y los **pendientes de la Fase 3 (OTA del UNO)** en
+  [`HALLAZGOS.md`](HALLAZGOS.md).
 
 ## Mando Bluetooth (Funlab FF01) sin PC
 
