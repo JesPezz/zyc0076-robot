@@ -15,6 +15,7 @@ html,body{margin:0;height:100%;background:#101214;color:#eee;font:14px system-ui
 #v{max-width:100%;max-height:100%;display:block}
 #hud{position:absolute;top:6px;left:8px;font-size:12px;color:#3f6;text-shadow:0 0 4px #000}
 #ver{position:absolute;top:6px;left:50%;transform:translateX(-50%);font-size:11px;color:#667}
+#dst{position:absolute;top:22px;left:50%;transform:translateX(-50%);font-size:13px;color:#8a9199;background:rgba(0,0,0,.45);padding:2px 8px;border-radius:6px}
 #cl{position:absolute;bottom:8px;right:8px;padding:10px 14px;border:0;border-radius:8px;background:#2a7;color:#041;font-weight:700}
 #led{position:absolute;bottom:8px;left:8px;padding:10px 14px;border:0;border-radius:8px;background:#31373b;color:#eee;font-weight:700}
 #led.on{background:#fc3;color:#420}
@@ -34,6 +35,7 @@ html,body{margin:0;height:100%;background:#101214;color:#eee;font:14px system-ui
     <img id=v alt="">
     <div id=hud>camara apagada</div>
     <div id=ver>v%V%</div>
+    <div id=dst>--</div>
     <button id=led>LUZ OFF</button>
     <button id=slp>REPOSO</button>
     <button id=cl>CAMARA ON</button>
@@ -108,5 +110,12 @@ document.getElementById('slp').addEventListener('click',function(){
 });
 v.onload=function(){hud.textContent='camara ok';};
 v.onerror=function(){hud.textContent='error de camara';};
+// Distancia del sonar: el UNO la manda por la UART y el ESP32 la publica en /dist.
+var dst=document.getElementById('dst');
+setInterval(function(){
+  fetch('/dist',{cache:'no-store'}).then(function(r){return r.text();}).then(function(t){
+    dst.textContent=(t>=0)?(t+' cm'):'--';
+  })['catch'](function(){});
+},1000);
 </script>
 </body></html>)HTML";

@@ -1,4 +1,5 @@
 #include    <Servo.h>
+#include    <avr/wdt.h>                                     // watchdog: entrar al bootloader por software
 
 // servo control pin
 #define MOTOR_PIN           9
@@ -38,6 +39,7 @@ const int Moedl4        = 28;                               // model4
 const int MotorLeft     = 230;                              // servo turn left
 const int MotorRight    = 231;                              // servo turn right
 const int MotorCenter   = 232;                              // servo return to center
+const int Ota           = 254;                              // OTA del UNO: salta al bootloader (lo usa el ESP32)
 
 int Left_Tra_Value;
 int Center_Tra_Value;
@@ -87,6 +89,7 @@ void loop()
     {
     case 0:
         model1_func(order);
+        reportSonar();
         break;
     case 1:
         model2_func();      // OA model
@@ -380,10 +383,22 @@ float SR04(int Trig, int Echo)      // ultrasonic measured distance
     digitalWrite(Trig, HIGH);
     delayMicroseconds(10);
     digitalWrite(Trig, LOW);
-    float distance = pulseIn(Echo, HIGH) / 58.00;
+    // 25 ms de tope (~4 m): sin eco, el defecto de pulseIn es 1 s y bloquea el bucle
+    float distance = pulseIn(Echo, HIGH, 25000) / 58.00;
     delay(10);
     
     return distance;
+}
+
+// Modo manual: el sonar antes solo se leia en los modos automaticos. Ahora
+// informa la distancia al ESP32 (y al monitor serie) para mostrarla en la pagina.
+void reportSonar()
+{
+    static unsigned long last = 0;
+    if (millis() - last < 300) return;
+    last = millis();
+    Serial.print(F("D:"));
+    Serial.println((int)SR04(Trig_PIN, Echo_PIN));
 }
 
 void RXpack_func()  //Receive data
@@ -397,6 +412,13 @@ void RXpack_func()  //Receive data
             {
                 order = RX_package[1];
                 Serial.println(order);
+                if (order == Ota)                               // OTA del UNO: saltar al bootloader
+                {
+                    Serial.flush();                             // que el "254" salga antes del reset
+                    cli();
+                    wdt_enable(WDTO_15MS);                      // el watchdog resetea; optiboot escucha ~1 s
+                    for (;;) {}
+                }
                 if(order == Moedl1) 
                 {
                     model_var = 0;

@@ -26,7 +26,8 @@ enum : uint8_t {
     O_UPLEFT = 20, O_DOWNLEFT = 129, O_UPRIGHT = 72, O_DOWNRIGHT = 34,
     O_CCW = 172, O_CW = 83,
     O_M1 = 25, O_M2 = 26, O_M3 = 27, O_M4 = 28,
-    O_SVL = 230, O_SVR = 231, O_SVC = 232
+    O_SVL = 230, O_SVR = 231, O_SVC = 232,
+    O_UNOOTA = 254          // el UNO salta a su bootloader (optiboot) para programarse
 };
 
 static inline void unoSend(uint8_t order) {
@@ -46,7 +47,7 @@ static void gestoOta() {
 struct Net { const char* ssid; const char* pass; };
 static const Net NETS[] = {
     {"INFINITUM181E", "zKYRN3FFC7"},
-    {"INFINITUM181E_EXT", "chonaverijas"},
+    {"INFINITUM181E_EXT", "chonaverijas"},  // repetidor de casa: solo cuando esta al alcance
     {"TP-Link_BF0C", "Chonaverijas02"},
 };
 
@@ -57,6 +58,7 @@ static const Net NETS[] = {
 ControllerPtr myControllers[BP32_MAX_GAMEPADS];
 static uint8_t g_order = O_STOP;
 static unsigned long g_remoteMs = 0;  // ultima orden recibida por WiFi
+static bool g_unoBusy = false;        // OTA del UNO en curso: no enviar nada al UART0
 
 static inline void unoOrder(uint8_t o) {
     if (o == g_order) return;
@@ -107,7 +109,7 @@ void processControllers() {
         }
     }
     // sin mando: solo paramos si nadie manda por WiFi (concesion de 700 ms)
-    if (!any && millis() - g_remoteMs > 700) unoOrder(O_STOP);
+    if (!any && !g_unoBusy && millis() - g_remoteMs > 700) unoOrder(O_STOP);
 }
 
 // -------------------------------------------------------------------- camara
@@ -228,7 +230,7 @@ static void otaBegin() {
 // Al arrancar se consulta el ultimo release de GitHub; si su tag es mayor que
 // FW_VERSION se descarga el asset GH_ASSET y se flashea. No hace falta cable ni
 // subir nada al dispositivo: basta publicar un release nuevo.
-#define FW_VERSION "1.7"
+#define FW_VERSION "1.12"
 #define GH_REPO "JesPezz/zyc0076-robot"
 #define GH_ASSET "firmware.bin"
 
@@ -342,6 +344,25 @@ static bool validOrder(int o) {
     }
 }
 
+// Sonar: el UNO manda "D:<cm>" por la misma UART de las ordenes (solo en manual).
+static int g_distCm = -1;
+static void sonarRead() {
+    static String line;
+    while (Serial.available()) {
+        char c = (char)Serial.read();
+        if (c == '\n') {
+            if (line.startsWith("D:")) g_distCm = line.substring(2).toInt();
+            line = "";
+        } else if (c != '\r' && line.length() < 24) {
+            line += c;
+        }
+    }
+}
+
+static void handleDist() {
+    uiServer.send(200, "text/plain", String(g_distCm));
+}
+
 static void handleCtrl() {
     if (!uiServer.hasArg("o")) { uiServer.send(400, "text/plain", "falta o"); return; }
     int o = uiServer.arg("o").toInt();
@@ -410,6 +431,145 @@ static bool bootloaderSync(uint8_t pin, int* ms) {
 }
 
 // GET /unoprobe -> que GPIO (si alguno) resetea el UNO
+// ------------------------------------------ OTA del UNO (STK500v1 por UART0)
+// El sketch del UNO lleva la orden 254: imprime "254", se resetea por watchdog y
+// su bootloader (optiboot) escucha ~1 s. Aqui se le habla como avrdude: sync,
+// load address y prog page de 128 B. Nada de cables: el enlace serie ya existe.
+static int stkRead(uint8_t* buf, int n, unsigned ms) {
+    unsigned long t0 = millis();
+    int got = 0;
+    while (got < n && millis() - t0 < ms) {
+        if (Serial.available()) buf[got++] = (uint8_t)Serial.read();
+        else delay(1);
+    }
+    return got;
+}
+
+// respuesta esperada de optiboot: INSYNC (0x14) + OK (0x10)
+static bool stkCmd(const uint8_t* cmd, int len) {
+    Serial.write(cmd, len);
+    Serial.flush();
+    uint8_t r[2];
+    if (stkRead(r, 2, 400) != 2) return false;
+    return r[0] == 0x14 && r[1] == 0x10;
+}
+
+// Bytes que llegan del UNO mientras se busca el bootloader (para el mensaje de error)
+static int g_unoRx = 0;
+
+static bool unoEntrarBootloader() {
+    g_unoBusy = true;
+    g_unoRx = 0;
+    while (Serial.available()) Serial.read();
+    unoSend(O_UNOOTA);
+    Serial.flush();
+    // El UNO se resetea por watchdog en ~15 ms y optiboot solo escucha ~1 s: hay
+    // que martillear el sync sin esperar; si se espera, la ventana se cierra.
+    const uint8_t sync[2] = {0x30, 0x20};
+    unsigned long t0 = millis();
+    bool hay_sync = false;
+    while (millis() - t0 < 2500 && !hay_sync) {
+        Serial.write(sync, 2);
+        Serial.flush();
+        unsigned long t1 = millis();
+        while (millis() - t1 < 40) {
+            if (Serial.available()) {
+                if ((uint8_t)Serial.read() == 0x14) hay_sync = true;  // INSYNC
+                g_unoRx++;
+            } else {
+                delay(1);
+            }
+        }
+    }
+    if (!hay_sync) { g_unoBusy = false; return false; }
+    delay(20);
+    while (Serial.available()) Serial.read();       // el 0x10 (OK) que sigue al INSYNC
+    const uint8_t prog[2] = {0x50, 0x20};          // enter progmode
+    return stkCmd(prog, 2);
+}
+
+static bool unoPagina(unsigned addr, const uint8_t* data) {
+    uint8_t cmd[4] = {0x55, (uint8_t)((addr >> 1) & 0xFF), (uint8_t)((addr >> 9) & 0xFF), 0x20};
+    if (!stkCmd(cmd, 4)) return false;
+    const uint8_t hdr[2] = {0x64, 0x7F};           // prog page, 128 bytes
+    Serial.write(hdr, 2);
+    Serial.write((uint8_t)'F');
+    Serial.write(data, 128);
+    Serial.write((uint8_t)0x20);
+    Serial.flush();
+    uint8_t r[2];
+    if (stkRead(r, 2, 2000) != 2) return false;
+    return r[0] == 0x14 && r[1] == 0x10;
+}
+
+static int hexNib(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    return -1;
+}
+
+// Parsea el .hex de Arduino (Intel HEX) y graba pagina a pagina, sin buffer grande.
+static bool unoProgramarHex(const String& hex) {
+    uint8_t page[128];
+    int fill = 0;
+    unsigned pageAddr = 0;
+    bool eof = false;
+    const char* p = hex.c_str();
+    size_t i = 0, n = hex.length();
+    while (!eof && i + 10 < n) {
+        if (p[i] != ':') { i++; continue; }
+        int len = hexNib(p[i + 1]) * 16 + hexNib(p[i + 2]);
+        unsigned addr = (hexNib(p[i + 3]) << 12) | (hexNib(p[i + 4]) << 8) |
+                        (hexNib(p[i + 5]) << 4) | hexNib(p[i + 6]);
+        int type = hexNib(p[i + 7]) * 16 + hexNib(p[i + 8]);
+        i += 9;
+        if (type == 1) { eof = true; break; }      // fin de fichero
+        if (type != 0) { i += len * 2 + 2; continue; }
+        for (int k = 0; k < len; k++, i += 2) {
+            if (fill == 0) pageAddr = addr - (addr % 128);
+            page[fill++] = (uint8_t)(hexNib(p[i]) * 16 + hexNib(p[i + 1]));
+            if (fill == 128) {
+                if (!unoPagina(pageAddr, page)) return false;
+                fill = 0;
+            }
+        }
+        i += 2;                                    // checksum
+    }
+    if (fill) {                                    // ultima pagina incompleta
+        memset(page + fill, 0xFF, 128 - fill);
+        if (!unoPagina(pageAddr, page)) return false;
+    }
+    return eof;
+}
+
+static String g_unoHex;
+
+static void unoOtaUpload() {
+    HTTPUpload& up = uiServer.upload();
+    if (up.status == UPLOAD_FILE_START) {
+        g_unoHex = "";
+        g_unoHex.reserve(24000);                   // el .hex ronda los 18 KB
+    } else if (up.status == UPLOAD_FILE_WRITE) {
+        g_unoHex.concat((const char*)up.buf, up.currentSize);
+    }
+}
+
+static void unoOtaDone() {
+    if (!g_unoHex.length()) { uiServer.send(400, "text/plain", "sin fichero"); return; }
+    String res = "no entra al bootloader (rx=" + String(g_unoRx) + ")";
+    if (unoEntrarBootloader()) {
+        res = "FALLO al programar";
+        if (unoProgramarHex(g_unoHex)) {
+            const uint8_t leave[2] = {0x51, 0x20};  // leave progmode: arranca el sketch nuevo
+            res = stkCmd(leave, 2) ? "OK" : "programado, pero no arranca";
+        }
+    }
+    g_unoBusy = false;
+    g_unoHex = "";
+    uiServer.send(200, "text/plain", res);
+}
+
 static void handleUnoProbe() {
     unoOrder(O_STOP);   // el UNO va a reiniciarse: que no quede marcha puesta
     delay(50);
@@ -438,6 +598,70 @@ static void handleUnoProbe() {
     uiServer.send(200, "text/plain", res);
 }
 
+// Sonda del camino de vuelta UNO->ESP32: el UNO imprime `order` por cada paquete
+// valido y el keepalive manda uno cada 200 ms, asi que el GPIO que este conectado
+// a su TX vera flancos. Se miran los GPIO libres (16/17 los usa la PSRAM en QUAD).
+static volatile unsigned g_edges = 0;
+static void IRAM_ATTR cuentaFlanco() { g_edges++; }
+
+static void handleRxScan() {
+    String res = "flancos en 400 ms (el UNO habla cada 200 ms):\n";
+    for (unsigned i = 0; i < sizeof(RST_CAND); i++) {
+        uint8_t p = RST_CAND[i];
+        g_edges = 0;
+        pinMode(p, INPUT);  // sin pull-up: no cargamos la linea del UNO
+        attachInterrupt(digitalPinToInterrupt(p), cuentaFlanco, FALLING);
+        unsigned long t0 = millis();
+        while (millis() - t0 < 400) delay(1);
+        detachInterrupt(digitalPinToInterrupt(p));
+        res += "GPIO" + String(p) + ": " + String(g_edges) + " flancos\n";
+    }
+    res += "GPIO3 (RX del UART0): " + String(Serial.available()) + " bytes en buffer\n";
+    uiServer.send(200, "text/plain", res);
+}
+
+// Sonda del CONTENIDO: el UNO imprime `order` (30 0D 0A = "0\r\n") por cada paquete
+// valido; nosotros mandamos A5 00 5A. Distingue "me oye el UNO" de "me oigo yo mismo".
+static volatile unsigned g_e14 = 0, g_e2 = 0;
+static void IRAM_ATTR c14() { g_e14++; }
+static void IRAM_ATTR c2() { g_e2++; }
+
+static void handleRxBytes() {
+    String res = "";
+    pinMode(14, INPUT);
+    pinMode(2, INPUT);
+    attachInterrupt(digitalPinToInterrupt(14), c14, FALLING);
+    attachInterrupt(digitalPinToInterrupt(2), c2, FALLING);
+    // A) en reposo: el keepalive no corre (este handler bloquea loop()), asi que
+    //    cualquier flanco aqui NO lo causan nuestros paquetes.
+    g_e14 = 0; g_e2 = 0;
+    unsigned long t0 = millis();
+    while (millis() - t0 < 400) delay(1);
+    res += "reposo 400 ms: GPIO14=" + String(g_e14) + " GPIO2=" + String(g_e2) + "\n";
+
+    // B) un unico paquete al UNO
+    while (Serial.available()) Serial.read();
+    g_e14 = 0; g_e2 = 0;
+    unoOrder(O_STOP);
+    delay(10);
+    unoSend(O_STOP);
+    String hex = "";
+    t0 = millis();
+    while (millis() - t0 < 400) {
+        while (Serial.available()) {
+            char b[4];
+            snprintf(b, sizeof(b), "%02X ", (uint8_t)Serial.read());
+            hex += b;
+        }
+        delay(1);
+    }
+    detachInterrupt(digitalPinToInterrupt(14));
+    detachInterrupt(digitalPinToInterrupt(2));
+    res += "tras 1 paquete (A5 00 5A): GPIO14=" + String(g_e14) + " GPIO2=" + String(g_e2) + "\n";
+    res += "bytes UART0 (hex): " + (hex.length() ? hex : String("(ninguno)")) + "\n";
+    uiServer.send(200, "text/plain", res);
+}
+
 // OTA manual: el PC sube el binario con `curl -F firmware=@firmware.bin /update`.
 static void httpUpdateDone() {
     uiServer.send(200, "text/plain", Update.hasError() ? "FAIL" : "OK");
@@ -459,10 +683,14 @@ static void httpUpdateUpload() {
 static void httpBegin() {
     uiServer.on("/", HTTP_GET, handleRoot);
     uiServer.on("/c", HTTP_GET, handleCtrl);
+    uiServer.on("/dist", HTTP_GET, handleDist);
     uiServer.on("/ledon", HTTP_GET, handleLed);
     uiServer.on("/ledoff", HTTP_GET, handleLed);
     uiServer.on("/sleep", HTTP_GET, handleSleep);
     uiServer.on("/unoprobe", HTTP_GET, handleUnoProbe);
+    uiServer.on("/rxscan", HTTP_GET, handleRxScan);
+    uiServer.on("/rxbytes", HTTP_GET, handleRxBytes);
+    uiServer.on("/updateuno", HTTP_POST, unoOtaDone, unoOtaUpload);
     uiServer.on("/update", HTTP_POST, httpUpdateDone, httpUpdateUpload);
     uiServer.begin();
 }
@@ -490,12 +718,13 @@ void setup() {
 
 void loop() {
     if (BP32.update()) processControllers();
+    sonarRead();  // distancia del UNO (linea "D:<cm>")
 
     if (WiFi.status() == WL_CONNECTED) { ArduinoOTA.handle(); uiServer.handleClient(); }
 
     // reafirma la ultima orden (el UNO la mantiene en bucle)
     static unsigned long last = 0;
-    if (millis() - last > 200) { last = millis(); unoSend(g_order); }
+    if (!g_unoBusy && millis() - last > 200) { last = millis(); unoSend(g_order); }
 
     delay(10);
 }
