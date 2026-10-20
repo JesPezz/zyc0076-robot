@@ -1,5 +1,4 @@
 #include    <Servo.h>
-#include    <avr/wdt.h>                                     // watchdog: entrar al bootloader por software
 
 // servo control pin
 #define MOTOR_PIN           9
@@ -89,7 +88,7 @@ void loop()
     {
     case 0:
         model1_func(order);
-        reportSonar();
+        reportSensors();
         break;
     case 1:
         model2_func();      // OA model
@@ -390,15 +389,21 @@ float SR04(int Trig, int Echo)      // ultrasonic measured distance
     return distance;
 }
 
-// Modo manual: el sonar antes solo se leia en los modos automaticos. Ahora
-// informa la distancia al ESP32 (y al monitor serie) para mostrarla en la pagina.
-void reportSonar()
+// Modo manual: el sonar y los sensores de linea antes solo se leian en los modos
+// automaticos. Ahora informan al ESP32 (y al monitor serie) para verlos en la pagina.
+void reportSensors()
 {
     static unsigned long last = 0;
     if (millis() - last < 300) return;
     last = millis();
     Serial.print(F("D:"));
     Serial.println((int)SR04(Trig_PIN, Echo_PIN));
+    Serial.print(F("L:"));
+    Serial.print(analogRead(LEFT_LINE_TRACJING));
+    Serial.print(F(","));
+    Serial.print(analogRead(CENTER_LINE_TRACJING));
+    Serial.print(F(","));
+    Serial.println(analogRead(RIGHT_LINE_TRACJING));
 }
 
 void RXpack_func()  //Receive data
@@ -414,10 +419,12 @@ void RXpack_func()  //Receive data
                 Serial.println(order);
                 if (order == Ota)                               // OTA del UNO: saltar al bootloader
                 {
-                    Serial.flush();                             // que el "254" salga antes del reset
+                    Serial.flush();                             // que el "254" salga antes del salto
                     cli();
-                    wdt_enable(WDTO_15MS);                      // el watchdog resetea; optiboot escucha ~1 s
-                    for (;;) {}
+                    // optiboot solo espera el sync si MCUSR esta a 0 ("application
+                    // request"); con un reset por watchdog se va directo a la app.
+                    MCUSR = 0;
+                    ((void (*)(void))0)();                      // vector de reset sin resetear
                 }
                 if(order == Moedl1) 
                 {

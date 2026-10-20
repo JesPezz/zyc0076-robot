@@ -62,8 +62,9 @@ suelta va a `/c?o=<orden>` y el UNO la mantiene hasta que llega otra.
 El firmware lleva su versión en `FW_VERSION` (`main/sketch.cpp`). **Al arrancar**
 consulta el último release de `JesPezz/zyc0076-robot`; si su tag es mayor,
 descarga el asset `firmware.bin`, se flashea y reinicia. Mueve el servo
-(barrido izquierda-derecha-centro) para avisar del **inicio** y del **fin** de
-la actualización. Si ya está al día, no hace nada.
+(barrido izquierda-derecha-centro) y da tres destellos con el LED de iluminación
+para avisar del **inicio** y del **fin** de la actualización. Si ya está al día,
+no hace nada.
 
 Para publicar una versión nueva:
 

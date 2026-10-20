@@ -20,6 +20,7 @@
 // ---------------------------------------------------------------- enlace UNO
 #define UNO_HDR 0xA5
 #define UNO_TAIL 0x5A
+#define LED_PIN 4   // flash/iluminacion del ESP32-CAM, activo en HIGH
 
 enum : uint8_t {
     O_STOP = 0, O_FWD = 92, O_BACK = 163, O_LEFT = 149, O_RIGHT = 106,
@@ -41,6 +42,11 @@ static void gestoOta() {
     for (int i = 0; i < 50; i++) { unoSend(O_SVR); delay(20); }
     for (int i = 0; i < 25; i++) { unoSend(O_SVL); delay(20); }
     unoSend(O_SVC);
+    // aviso luminoso: 3 destellos del LED de iluminacion (inicio y fin de la OTA)
+    for (int i = 0; i < 3; i++) {
+        digitalWrite(LED_PIN, HIGH); delay(150);
+        digitalWrite(LED_PIN, LOW);  delay(150);
+    }
 }
 
 // ---------------------------------------------------------------------- red
@@ -129,7 +135,6 @@ void processControllers() {
 #define VSYNC_GPIO_NUM  25
 #define HREF_GPIO_NUM   23
 #define PCLK_GPIO_NUM   22
-#define LED_PIN          4  // flash/iluminacion del ESP32-CAM, activo en HIGH
 
 #define PART_BOUNDARY "123456789000000000000987654321"
 
@@ -230,7 +235,7 @@ static void otaBegin() {
 // Al arrancar se consulta el ultimo release de GitHub; si su tag es mayor que
 // FW_VERSION se descarga el asset GH_ASSET y se flashea. No hace falta cable ni
 // subir nada al dispositivo: basta publicar un release nuevo.
-#define FW_VERSION "1.12"
+#define FW_VERSION "1.13"
 #define GH_REPO "JesPezz/zyc0076-robot"
 #define GH_ASSET "firmware.bin"
 
@@ -346,12 +351,19 @@ static bool validOrder(int o) {
 
 // Sonar: el UNO manda "D:<cm>" por la misma UART de las ordenes (solo en manual).
 static int g_distCm = -1;
+static int g_line[3] = {-1, -1, -1};   // sensores de linea A0/A1/A2 del UNO
 static void sonarRead() {
     static String line;
     while (Serial.available()) {
         char c = (char)Serial.read();
         if (c == '\n') {
             if (line.startsWith("D:")) g_distCm = line.substring(2).toInt();
+            else if (line.startsWith("L:")) {
+                int a, b, d;
+                if (sscanf(line.c_str() + 2, "%d,%d,%d", &a, &b, &d) == 3) {
+                    g_line[0] = a; g_line[1] = b; g_line[2] = d;
+                }
+            }
             line = "";
         } else if (c != '\r' && line.length() < 24) {
             line += c;
@@ -361,6 +373,13 @@ static void sonarRead() {
 
 static void handleDist() {
     uiServer.send(200, "text/plain", String(g_distCm));
+}
+
+// 43,512,610,498: distancia en cm y las tres lecturas de linea (A0,A1,A2)
+static void handleSens() {
+    char buf[48];
+    snprintf(buf, sizeof(buf), "%d,%d,%d,%d", g_distCm, g_line[0], g_line[1], g_line[2]);
+    uiServer.send(200, "text/plain", buf);
 }
 
 static void handleCtrl() {
@@ -463,8 +482,8 @@ static bool unoEntrarBootloader() {
     while (Serial.available()) Serial.read();
     unoSend(O_UNOOTA);
     Serial.flush();
-    // El UNO se resetea por watchdog en ~15 ms y optiboot solo escucha ~1 s: hay
-    // que martillear el sync sin esperar; si se espera, la ventana se cierra.
+    // El UNO salta al bootloader con la orden 254 (MCUSR a 0 y salto al vector
+    // de reset) y optiboot solo escucha ~1 s: hay que martillear el sync.
     const uint8_t sync[2] = {0x30, 0x20};
     unsigned long t0 = millis();
     bool hay_sync = false;
@@ -684,6 +703,7 @@ static void httpBegin() {
     uiServer.on("/", HTTP_GET, handleRoot);
     uiServer.on("/c", HTTP_GET, handleCtrl);
     uiServer.on("/dist", HTTP_GET, handleDist);
+    uiServer.on("/sens", HTTP_GET, handleSens);
     uiServer.on("/ledon", HTTP_GET, handleLed);
     uiServer.on("/ledoff", HTTP_GET, handleLed);
     uiServer.on("/sleep", HTTP_GET, handleSleep);

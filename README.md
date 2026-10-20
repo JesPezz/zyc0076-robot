@@ -105,7 +105,10 @@ responde** y solo vuelve al agotarse el temporizador (reinicia y reconecta solo)
 El UNO nunca duerme: mantiene la última orden, por eso `/sleep` manda `stop` antes.
 `/dist` (GET) devuelve la distancia del sonar en cm (`-1` si aún no hay lectura):
 en modo manual el UNO no medía, así que ahora manda `D:<cm>` por serie cada 300 ms
-y el ESP32 lo lee; la página la muestra bajo la versión.
+y el ESP32 lo lee; la página la muestra bajo la versión. En la misma trama manda
+`L:<A0>,<A1>,<A2>` con los tres sensores de línea de abajo, que también solo se
+leían en los modos automáticos; la página los muestra al lado (`L… C… R…`) y
+`/sens` (GET) los devuelve todos juntos: `dist,A0,A1,A2`.
 
 El firmware del ESP32-CAM (carpeta `esp32cam/`) se une a la red WiFi en modo
 `STA`. Red usada: `INFINITUM181E` (la clave no se incluye en este repo publico).

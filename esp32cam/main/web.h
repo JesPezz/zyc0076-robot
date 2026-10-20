@@ -110,11 +110,13 @@ document.getElementById('slp').addEventListener('click',function(){
 });
 v.onload=function(){hud.textContent='camara ok';};
 v.onerror=function(){hud.textContent='error de camara';};
-// Distancia del sonar: el UNO la manda por la UART y el ESP32 la publica en /dist.
+// Sonar y sensores de linea: el UNO los manda por la UART y el ESP32 los publica en /sens.
 var dst=document.getElementById('dst');
 setInterval(function(){
-  fetch('/dist',{cache:'no-store'}).then(function(r){return r.text();}).then(function(t){
-    dst.textContent=(t>=0)?(t+' cm'):'--';
+  fetch('/sens',{cache:'no-store'}).then(function(r){return r.text();}).then(function(t){
+    var p=t.split(',');
+    var d=(p[0]>=0)?(p[0]+' cm'):'--';
+    dst.textContent=(p.length>3 && p[1]>=0)?(d+' | L'+p[1]+' C'+p[2]+' R'+p[3]):d;
   })['catch'](function(){});
 },1000);
 </script>
