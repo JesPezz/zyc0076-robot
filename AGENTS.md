@@ -43,10 +43,11 @@ También `esp32cam/sdkconfig.esp32cam` si se tocó (garantiza misma config).
 2. Verificar `#define FW_VERSION "X.Y"` en `esp32cam/main/sketch.cpp` = tag del release.
 2b. **Tamaño**: el binario NUNCA puede pasar de 1.572.864 B (ver «Tamaño máximo
    del firmware» más abajo y comprobarlo antes de publicar).
-3. Publicar en WSL con gh (`~/.local/bin/gh`, autenticado como JesPezz):
+3. Publicar en WSL con gh (`gh` está en `/usr/bin/gh`, autenticado como JesPezz;
+   el viejo `~/.local/bin/gh` ya no existe):
 
    ```
-   ~/.local/bin/gh release create vX.Y esp32cam/fw/firmware.bin -R JesPezz/zyc0076-robot \
+   gh release create vX.Y esp32cam/fw/firmware.bin -R JesPezz/zyc0076-robot \
      --title "vX.Y — <resumen>" --notes "<cambios>"
    ```
 
@@ -92,6 +93,18 @@ El binario NUNCA puede pasar de **1.572.864 B** = 1,5 MB = slot `ota_0` (`0x1800
   `raw.githubusercontent.com/JesPezz/zyc0076-robot/main/app/robot.apk` y
   comparando el `versionName` del APK bajado con el instalado.
 - La clave antigua (la que se commiteó por error) está **quemada**: no usarla.
+
+## Grabar el ESP32 por USB (lo fiable)
+
+```
+python3 -m esptool --chip esp32 -p /dev/ttyUSB0 -b 460800 write_flash 0x10000 <bin>
+```
+
+~24 s, hash verificado. **Quitar antes el pack del BAT**: el UNO habla por la misma
+UART0 y esptool falla con `Invalid head of packet (0xA5): Possible serial noise or
+corruption`. Si al terminar el chip se queda en modo descarga (0 bytes por serie),
+se arranca con un pulso RTS (`rts=True; sleep(0.3); rts=False`) o el botón RESET.
+La OTA por WiFi (`POST /update`) solo sirve de emergencia: a −60 dBm muere a mitad.
 
 ## Último recurso: compilar en el portátil
 
