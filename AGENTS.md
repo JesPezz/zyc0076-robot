@@ -47,12 +47,19 @@ También `esp32cam/sdkconfig.esp32cam` si se tocó (garantiza misma config).
    el viejo `~/.local/bin/gh` ya no existe):
 
    ```
-   gh release create vX.Y esp32cam/fw/firmware.bin -R JesPezz/zyc0076-robot \
-     --title "vX.Y — <resumen>" --notes "<cambios>"
+   gh release create vX.Y esp32cam/fw/firmware.bin <uno.hex> <uno.txt> \
+     -R JesPezz/zyc0076-robot --title "vX.Y — <resumen>" --notes "<cambios>"
    ```
 
+   `uno.txt` es **una línea con la marca de versión del UNO** (p. ej. `V3`) y tiene
+   que coincidir con el `F(" V3")` de `reportSensors()` en
+   `arduino/Arduino-UNO/Arduino-UNO.ino`; `uno.hex` es ese sketch compilado con
+   arduino-cli. El ESP32 compara la marca con la que el UNO reporta por serie y solo
+   entonces baja `uno.hex` y lo programa (idempotente: si coinciden, no toca nada).
+
 4. **NUNCA `--prerelease`**: el OTA consulta `releases/latest` y excluye prereleases.
-5. El asset debe llamarse **exactamente** `firmware.bin` (el OTA lo busca por nombre).
+5. Los assets se llaman **exactamente** `firmware.bin` (ESP32), `uno.hex` (sketch del
+   UNO) y `uno.txt` (su marca de versión): el OTA los busca por nombre.
    Si salió prerelease: `gh release edit vX.Y --prerelease=false`.
 
 ## Tamaño máximo del firmware (REGLA DURA)

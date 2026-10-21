@@ -115,9 +115,10 @@ que se ha enganchado —por debajo de −70 dBm la subida OTA se corta a mitad�
 `/rst?ms=N` mantiene bajo el RESET del UNO N ms (para comprobar el cable con el
 polímetro) y `/unoprobe` dice qué GPIO lo reinicia de verdad (en este robot
 **GPIO15**, la serigrafía del cabezal viene desordenada: IO12, IO13, IO15, IO14).
-`/updateuno` graba el UNO por WiFi usando ese cable, y `/update` sube el firmware
-del ESP32 (con el enlace justo conviene grabar por USB con `esptool`, que no
-depende del WiFi).
+`/updateuno` graba el UNO por WiFi usando ese cable, y `/unoupdate` hace lo mismo
+solo: consulta el release, compara la marca de version del UNO con `uno.txt` y, si
+difiere, baja `uno.hex` y lo programa. `/update` sube el firmware del ESP32 (con el
+enlace justo conviene grabar por USB con `esptool`, que no depende del WiFi).
 
 El firmware del ESP32-CAM (carpeta `esp32cam/`) se une a la red WiFi en modo
 `STA`. Red usada: `INFINITUM181E` (la clave no se incluye en este repo publico).
@@ -167,11 +168,17 @@ Como compilarlo y flashearlo por cable la primera vez esta en `esp32cam/README.m
 El firmware lleva su version (`FW_VERSION`) y **al arrancar** consulta el ultimo
 release de `JesPezz/zyc0076-robot`. Si el tag es mayor, descarga el asset
 `firmware.bin`, se flashea y reinicia; mueve el **servo** para avisar del inicio
-y del fin de la actualizacion. Basta publicar un release nuevo:
+y del fin de la actualizacion. En la misma pasada actualiza el **UNO**: compara la
+marca de version que el UNO reporta por el cable serie con el asset `uno.txt` y, si
+difiere, baja `uno.hex` y lo programa por ese mismo cable (el servo avisa igual).
+Basta publicar un release nuevo con los tres assets:
 
 ```bash
-gh release create v1.1 esp32cam/fw/firmware.bin --title "v1.1" --notes "..." --prerelease
+gh release create v1.28 esp32cam/fw/firmware.bin uno.hex uno.txt --title "v1.28" --notes "..."
 ```
+
+Un `.hex` malo deja el UNO en el bootloader: ese es el unico caso que sigue
+necesitando el cable USB.
 
 El modo descarga manual (BOOT + RESET) solo se necesita para el **primer**
 flasheo por USB. La IP la da el DHCP; el `hostname` es `zyc0076`.

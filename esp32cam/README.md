@@ -66,17 +66,25 @@ descarga el asset `firmware.bin`, se flashea y reinicia. Mueve el servo
 para avisar del **inicio** y del **fin** de la actualización. Si ya está al día,
 no hace nada.
 
+En la misma pasada actualiza el **UNO**: compara la marca de versión que el UNO
+reporta por el cable serie (`D:<cm> V3`) con el asset `uno.txt` del release y, si
+difiere, baja `uno.hex` y lo programa con el RESET por GPIO15 (el servo avisa
+igual). Si coincide, no lo toca.
+
 Para publicar una versión nueva:
 
-1. Subir `FW_VERSION` en `main/sketch.cpp` (p. ej. `"1.0"` → `"1.1"`).
+1. Subir `FW_VERSION` en `main/sketch.cpp` (p. ej. `"1.27"` → `"1.28"`).
 2. Compilar (`pio run -e esp32cam`) y copiar `.pio/build/esp32cam/firmware.bin`
    a `fw/firmware.bin`.
-3. Publicar el release con el binario adjunto, tag `vX.Y`:
+3. Si el UNO cambió: subir la marca `F(" V3")` de `reportSensors()` en
+   `arduino/Arduino-UNO/Arduino-UNO.ino`, compilarlo con arduino-cli a `uno.hex`
+   y escribir esa misma marca en `uno.txt` (una línea).
+4. Publicar el release con los tres assets, tag `vX.Y`:
    ```
-   gh release create v1.1 esp32cam/fw/firmware.bin --title "v1.1" --notes "..." --prerelease
+   gh release create v1.28 esp32cam/fw/firmware.bin uno.hex uno.txt --title "v1.28" --notes "..."
    ```
-   Los dispositivos toman el release de `releases/latest`; promocionar con
-   `gh release edit v1.1 --prerelease=false` cuando toque.
+   Los dispositivos toman el release de `releases/latest` (nunca usar
+   `--prerelease`: los prereleases no llegan al robot).
 
 > El tag y `FW_VERSION` deben coincidir; si el binario publicado tiene una
 > `FW_VERSION` vieja, el ESP32 volverá a ofrecerse la actualización en bucle.
