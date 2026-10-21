@@ -110,6 +110,15 @@ y el ESP32 lo lee; la página la muestra bajo la versión. En la misma trama man
 leían en los modos automáticos; la página los muestra al lado (`L… C… R…`) y
 `/sens` (GET) los devuelve todos juntos: `dist,A0,A1,A2`.
 
+Diagnóstico y mantenimiento: `/info` (GET) devuelve `SSID IP RSSI` de la red a la
+que se ha enganchado —por debajo de −70 dBm la subida OTA se corta a mitad—;
+`/rst?ms=N` mantiene bajo el RESET del UNO N ms (para comprobar el cable con el
+polímetro) y `/unoprobe` dice qué GPIO lo reinicia de verdad (en este robot
+**GPIO15**, la serigrafía del cabezal viene desordenada: IO12, IO13, IO15, IO14).
+`/updateuno` graba el UNO por WiFi usando ese cable, y `/update` sube el firmware
+del ESP32 (con el enlace justo conviene grabar por USB con `esptool`, que no
+depende del WiFi).
+
 El firmware del ESP32-CAM (carpeta `esp32cam/`) se une a la red WiFi en modo
 `STA`. Red usada: `INFINITUM181E` (la clave no se incluye en este repo publico).
 

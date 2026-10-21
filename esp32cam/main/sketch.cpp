@@ -21,6 +21,9 @@
 #define UNO_HDR 0xA5
 #define UNO_TAIL 0x5A
 #define LED_PIN 4   // flash/iluminacion del ESP32-CAM, activo en HIGH
+#define UNO_RST_PIN 15  // cable al RESET del UNO: la OTA del UNO lo pulsa aqui
+                        // (la serigrafia del cabezal no coincide: el pin que
+                        //  reinicia de verdad es el 15, comprobado con /unoprobe)
 
 enum : uint8_t {
     O_STOP = 0, O_FWD = 92, O_BACK = 163, O_LEFT = 149, O_RIGHT = 106,
@@ -174,18 +177,23 @@ static bool cameraInit() {
 }
 
 static void streamHandler() {
+    Serial.println("STR: entrada");
     WiFiClient client = camServer.client();
     client.setNoDelay(true);
     client.print(F("HTTP/1.1 200 OK\r\n"
                    "Access-Control-Allow-Origin: *\r\n"
                    "Content-Type: multipart/x-mixed-replace; boundary=" PART_BOUNDARY "\r\n\r\n"));
+    int n = 0;
     while (client.connected()) {
         camera_fb_t* fb = esp_camera_fb_get();
-        if (!fb) break;
+        if (!fb) { Serial.println("STR: fb NULL"); break; }
+        if (n == 0) Serial.printf("STR: fb len=%u fmt=%u %ux%u\n", (unsigned)fb->len, fb->format, fb->width, fb->height);
         uint8_t* jpg = nullptr;
         size_t len = 0;
         bool ok = frame2jpg(fb, 16, &jpg, &len);  // JPEG por software (RGB565); q16 = frames ~30% menores
         esp_camera_fb_return(fb);
+        if (n == 0) Serial.printf("STR: frame2jpg=%d len=%u\n", (int)ok, (unsigned)len);
+        n++;
         if (!ok) break;
         client.printf("--%s\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n",
                       PART_BOUNDARY, (unsigned)len);
@@ -216,8 +224,32 @@ static void camBegin() {
 static void wifiConnect() {
     WiFi.mode(WIFI_STA);
     WiFi.setSleep(false);  // modem sleep anade ~100 ms de latencia al stream MJPEG
-    for (const auto& n : NETS) {
-        WiFi.begin(n.ssid, n.pass);
+    // La antena del ESP32-CAM dentro del robot llega muy justa: se elige la red
+    // conocida con mejor senal, no la primera de la tabla (un repetidor cercano
+    // puede ir mejor que el router).
+    const int N = sizeof(NETS) / sizeof(NETS[0]);
+    bool used[8] = {};
+    int idx[8];
+    int cnt = 0;
+    int n = WiFi.scanNetworks();
+    while (cnt < N) {
+        int best = -1, bestRssi = -999;
+        for (int i = 0; i < n; i++)
+            for (int k = 0; k < N && k < 8; k++)
+                if (!used[k] && WiFi.SSID(i) == NETS[k].ssid && WiFi.RSSI(i) > bestRssi) {
+                    best = k;
+                    bestRssi = WiFi.RSSI(i);
+                }
+        if (best < 0) break;
+        used[best] = true;
+        idx[cnt++] = best;
+    }
+    WiFi.scanDelete();
+    for (int k = 0; k < N && k < 8; k++)
+        if (!used[k]) idx[cnt++] = k;  // las que no se ven, al final
+    for (int j = 0; j < cnt; j++) {
+        const Net& n2 = NETS[idx[j]];
+        WiFi.begin(n2.ssid, n2.pass);
         unsigned long t0 = millis();
         while (WiFi.status() != WL_CONNECTED && millis() - t0 < 8000) delay(100);
         if (WiFi.status() == WL_CONNECTED) return;
@@ -235,7 +267,7 @@ static void otaBegin() {
 // Al arrancar se consulta el ultimo release de GitHub; si su tag es mayor que
 // FW_VERSION se descarga el asset GH_ASSET y se flashea. No hace falta cable ni
 // subir nada al dispositivo: basta publicar un release nuevo.
-#define FW_VERSION "1.13"
+#define FW_VERSION "1.19"
 #define GH_REPO "JesPezz/zyc0076-robot"
 #define GH_ASSET "firmware.bin"
 
@@ -391,6 +423,24 @@ static void handleCtrl() {
     uiServer.send(200, "text/plain", "ok");
 }
 
+// GET /rst?ms=5000 -> mantiene el RESET del UNO en bajo (comprobar el cable con
+// el polimetro). Sin argumento, 5 s.
+static void handleRst() {
+    int ms = uiServer.hasArg("ms") ? uiServer.arg("ms").toInt() : 5000;
+    if (ms < 100 || ms > 20000) ms = 5000;
+    pinMode(UNO_RST_PIN, OUTPUT);
+    digitalWrite(UNO_RST_PIN, LOW);
+    uiServer.send(200, "text/plain", "reset del UNO en bajo " + String(ms) + " ms");
+    delay(ms);
+    pinMode(UNO_RST_PIN, INPUT);
+}
+
+// GET /info -> red, IP y senal: para saber a que red se engancha el robot
+static void handleInfo() {
+    uiServer.send(200, "text/plain",
+                  WiFi.SSID() + " " + WiFi.localIP().toString() + " " + String(WiFi.RSSI()) + " dBm");
+}
+
 static void handleRoot() {
     String html = FPSTR(PAGE_HTML);
     html.replace("%V%", FW_VERSION);  // la pagina muestra v1.4, v1.5, ...
@@ -479,28 +529,10 @@ static int g_unoRx = 0;
 static bool unoEntrarBootloader() {
     g_unoBusy = true;
     g_unoRx = 0;
-    while (Serial.available()) Serial.read();
-    unoSend(O_UNOOTA);
-    Serial.flush();
-    // El UNO salta al bootloader con la orden 254 (MCUSR a 0 y salto al vector
-    // de reset) y optiboot solo escucha ~1 s: hay que martillear el sync.
-    const uint8_t sync[2] = {0x30, 0x20};
-    unsigned long t0 = millis();
-    bool hay_sync = false;
-    while (millis() - t0 < 2500 && !hay_sync) {
-        Serial.write(sync, 2);
-        Serial.flush();
-        unsigned long t1 = millis();
-        while (millis() - t1 < 40) {
-            if (Serial.available()) {
-                if ((uint8_t)Serial.read() == 0x14) hay_sync = true;  // INSYNC
-                g_unoRx++;
-            } else {
-                delay(1);
-            }
-        }
-    }
-    if (!hay_sync) { g_unoBusy = false; return false; }
+    // Mismo camino que /unoprobe, que es el que funciona de verdad: un pulso y un
+    // unico sync. Con el bucle propio no habia respuesta (rx=0) en la misma placa.
+    int ms = 0;
+    if (!bootloaderSync(UNO_RST_PIN, &ms)) { g_unoBusy = false; return false; }
     delay(20);
     while (Serial.available()) Serial.read();       // el 0x10 (OK) que sigue al INSYNC
     const uint8_t prog[2] = {0x50, 0x20};          // enter progmode
@@ -704,10 +736,12 @@ static void httpBegin() {
     uiServer.on("/c", HTTP_GET, handleCtrl);
     uiServer.on("/dist", HTTP_GET, handleDist);
     uiServer.on("/sens", HTTP_GET, handleSens);
+    uiServer.on("/rst", HTTP_GET, handleRst);
     uiServer.on("/ledon", HTTP_GET, handleLed);
     uiServer.on("/ledoff", HTTP_GET, handleLed);
     uiServer.on("/sleep", HTTP_GET, handleSleep);
     uiServer.on("/unoprobe", HTTP_GET, handleUnoProbe);
+    uiServer.on("/info", HTTP_GET, handleInfo);
     uiServer.on("/rxscan", HTTP_GET, handleRxScan);
     uiServer.on("/rxbytes", HTTP_GET, handleRxBytes);
     uiServer.on("/updateuno", HTTP_POST, unoOtaDone, unoOtaUpload);

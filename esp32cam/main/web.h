@@ -16,6 +16,7 @@ html,body{margin:0;height:100%;background:#101214;color:#eee;font:14px system-ui
 #hud{position:absolute;top:6px;left:8px;font-size:12px;color:#3f6;text-shadow:0 0 4px #000}
 #ver{position:absolute;top:6px;left:50%;transform:translateX(-50%);font-size:11px;color:#667}
 #dst{position:absolute;top:22px;left:50%;transform:translateX(-50%);font-size:13px;color:#8a9199;background:rgba(0,0,0,.45);padding:2px 8px;border-radius:6px}
+#net{position:absolute;top:48px;left:50%;transform:translateX(-50%);font-size:11px;color:#6b747c}
 #cl{position:absolute;bottom:8px;right:8px;padding:10px 14px;border:0;border-radius:8px;background:#2a7;color:#041;font-weight:700}
 #led{position:absolute;bottom:8px;left:8px;padding:10px 14px;border:0;border-radius:8px;background:#31373b;color:#eee;font-weight:700}
 #led.on{background:#fc3;color:#420}
@@ -36,6 +37,7 @@ html,body{margin:0;height:100%;background:#101214;color:#eee;font:14px system-ui
     <div id=hud>camara apagada</div>
     <div id=ver>v%V%</div>
     <div id=dst>--</div>
+    <div id=net></div>
     <button id=led>LUZ OFF</button>
     <button id=slp>REPOSO</button>
     <button id=cl>CAMARA ON</button>
@@ -119,5 +121,9 @@ setInterval(function(){
     dst.textContent=(p.length>3 && p[1]>=0)?(d+' | L'+p[1]+' C'+p[2]+' R'+p[3]):d;
   })['catch'](function(){});
 },1000);
+// Red del robot: con varios repetidores no hay forma de saber a cual se engancha
+fetch('/info',{cache:'no-store'}).then(function(r){return r.text();}).then(function(t){
+  document.getElementById('net').textContent=t;
+})['catch'](function(){});
 </script>
 </body></html>)HTML";
