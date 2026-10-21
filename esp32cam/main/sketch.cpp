@@ -267,7 +267,7 @@ static void otaBegin() {
 // Al arrancar se consulta el ultimo release de GitHub; si su tag es mayor que
 // FW_VERSION se descarga el asset GH_ASSET y se flashea. No hace falta cable ni
 // subir nada al dispositivo: basta publicar un release nuevo.
-#define FW_VERSION "1.22"
+#define FW_VERSION "1.26"
 #define GH_REPO "JesPezz/zyc0076-robot"
 #define GH_ASSET "firmware.bin"
 
@@ -281,27 +281,65 @@ static int versionNum(const String& v) {
 }
 
 // Devuelve la URL del asset del ultimo release si es mas nuevo, o "" si no.
+// Diagnostico del TLS: separa "no llego" (TCP) de "no negocio" (handshake) y saca
+// el error de mbedTLS. Se llama antes y despues de inicializar la camara: si el
+// handshake solo falla despues, el culpable es el heap que deja la camara.
+static void tlsProbe() {
+    WiFiClient plain;
+    bool tcp = plain.connect("api.github.com", 443);
+    Serial.printf("TLS: TCP=%d heap=%u max=%u\n", (int)tcp, (unsigned)ESP.getFreeHeap(),
+                  (unsigned)ESP.getMaxAllocHeap());
+    if (tcp) plain.stop();
+
+    WiFiClientSecure c;
+    c.setInsecure();
+    unsigned long t0 = millis();
+    bool ok = c.connect("api.github.com", 443);
+    char err[160] = {0};
+    int e = c.lastError(err, sizeof(err));
+    Serial.printf("TLS: handshake=%d en %lums err=%d [%s] heap=%u max=%u\n",
+                  (int)ok, millis() - t0, e, err, (unsigned)ESP.getFreeHeap(),
+                  (unsigned)ESP.getMaxAllocHeap());
+    if (ok) c.stop();
+}
+
+// GET a la API de GitHub con reintentos. Justo despues de asociarse el DNS o la
+// ruta pueden no estar listos y GET() devuelve -1 (que es lo mismo para DNS roto
+// que para TCP rechazado), asi que se resuelve el nombre antes y se reintenta.
+static bool githubGet(const String& url, String& body) {
+    for (int intento = 0; intento < 3; intento++) {
+        IPAddress ip;
+        if (!WiFi.hostByName("api.github.com", ip)) {
+            Serial.printf("OTA: no resuelve api.github.com (intento %d)\n", intento + 1);
+            delay(800);
+            continue;
+        }
+        WiFiClientSecure client;
+        client.setInsecure();  // ponytail: no valida el certificado (robot personal); pinear la CA si hace falta
+        HTTPClient https;
+        if (!https.begin(client, url)) { delay(800); continue; }
+        https.addHeader("User-Agent", "zyc0076");
+        https.addHeader("Accept", "application/vnd.github+json");
+        int code = https.GET();
+        if (code == HTTP_CODE_OK) {
+            body = https.getString();
+            https.end();
+            return true;
+        }
+        Serial.printf("OTA: GitHub HTTP %d (intento %d)\n", code, intento + 1);
+        https.end();
+        delay(800);
+    }
+    return false;
+}
+
 static String releaseBinUrl() {
     static const char TAG_KEY[] = "\"tag_name\":\"";
     static const char URL_KEY[] = "\"browser_download_url\":\"";
 
-    WiFiClientSecure client;
-    client.setInsecure();  // ponytail: no valida el certificado (robot personal); pinear la CA si hace falta
-
-    HTTPClient https;
+    String body;
     String api = String("https://api.github.com/repos/") + GH_REPO + "/releases/latest";
-    if (!https.begin(client, api)) return "";
-    https.addHeader("User-Agent", "zyc0076");
-    https.addHeader("Accept", "application/vnd.github+json");
-
-    int code = https.GET();
-    if (code != HTTP_CODE_OK) {
-        Serial.printf("OTA: GitHub HTTP %d\n", code);
-        https.end();
-        return "";
-    }
-    String body = https.getString();
-    https.end();
+    if (!githubGet(api, body)) return "";
 
     int p = body.indexOf(TAG_KEY);
     if (p < 0) return "";
@@ -791,13 +829,15 @@ void setup() {
     BP32.enableBLEService(false);
 
     wifiConnect();  // primero la red: lwip debe estar listo antes de la tarea de la camara
-    g_camOk = cameraInit();
-    if (g_camOk) camBegin();
     if (WiFi.status() == WL_CONNECTED) {
+        tlsProbe();         // antes de la camara: aqui sobra heap
         otaBegin();
         httpBegin();
-        otaDesdeRelease();  // busca release solo al arrancar
+        otaDesdeRelease();  // busca release solo al arrancar (antes de la camara: el TLS necesita heap)
     }
+    g_camOk = cameraInit();
+    if (g_camOk) camBegin();
+    if (WiFi.status() == WL_CONNECTED) tlsProbe();  // despues de la camara: comparar
 }
 
 void loop() {

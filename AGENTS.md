@@ -72,8 +72,11 @@ El binario NUNCA puede pasar de **1.572.864 B** = 1,5 MB = slot `ota_0` (`0x1800
 - **Si se pasa, recortar** (esto ya está aplicado en `sdkconfig.defaults`, no quitarlo):
   `CONFIG_LOG_DEFAULT_LEVEL_NONE` + `CONFIG_LOG_MAXIMUM_LEVEL=0` +
   `CONFIG_BOOTLOADER_LOG_LEVEL_NONE` (≈ -82 KB), `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_MAX_CERTS=3`,
-  `CONFIG_MBEDTLS_ERROR_STRINGS=n` y las curvas ECP sobrantes a `n` (dejar solo
-  `SECP256R1` y `CURVE25519`, que son las que usan GitHub y Let's Encrypt).
+  `CONFIG_MBEDTLS_ERROR_STRINGS=n` y las curvas ECP sobrantes a `n`, dejando
+  **`SECP256R1`, `SECP384R1` y `CURVE25519`**. GitHub firma con P-384: sin ella el
+  TLS muere con `MBEDTLS_ERR_PK_UNKNOWN_NAMED_CURVE` (-0x3A00) y en el log solo se ve
+  `handshake=0`, así que la consulta del release falla en cada arranque (pasó hasta la
+  v1.25; la regla vieja, «solo SECP256R1 y CURVE25519», era FALSA).
   Cuidado: `sdkconfig.esp32cam` ya generado NO se re-genera solo — hay que
   parchearlo también o el recorte no entra en el build.
 - **Referencia**: v1.5 = 1.488.688 B (84 KB de margen). v1.3 = 1.497.712 B.
