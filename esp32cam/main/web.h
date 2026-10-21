@@ -29,6 +29,16 @@ html,body{margin:0;height:100%;background:#101214;color:#eee;font:14px system-ui
 .b{padding:12px 16px;border:0;border-radius:10px;background:#31373b;color:#eee;font-size:17px;font-weight:600}
 #stop{background:#c8352f;color:#fff;padding:16px 24px;font-size:18px}
 .row{display:flex;gap:10px}
+.mod{padding:8px 10px;border:0;border-radius:8px;background:#31373b;color:#eee;font-size:12px;font-weight:600}
+.mod.on{background:#2a7;color:#041}
+#cfg{position:fixed;inset:0;background:rgba(8,10,12,.97);display:none;flex-direction:column;padding:12px 14px;overflow:auto;z-index:9}
+#cfg.on{display:flex}
+#cfg h3{margin:0 0 8px;font-size:14px;color:#8a9199;font-weight:600;letter-spacing:.5px}
+#cfg label{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid #1d2124;font-size:13px}
+#cfg select,#cfg input[type=range]{background:#22262a;color:#eee;border:1px solid #3a4045;border-radius:6px;padding:4px 6px}
+#cfg input[type=range]{width:52%}
+#cfg .ck{width:20px;height:20px}
+#cfgx{margin-top:12px;padding:12px;border:0;border-radius:10px;background:#2a7;color:#041;font-weight:700;font-size:15px}
 </style></head>
 <body>
 <div id=wrap>
@@ -47,8 +57,28 @@ html,body{margin:0;height:100%;background:#101214;color:#eee;font:14px system-ui
     <div id=mid>
       <div class=row><button class=b id=ccw>&#8634;</button><button class=b id=cw>&#8635;</button></div>
       <button class=b id=stop>STOP</button>
+      <div class=row><button class="b mod" data-m=1>MANUAL</button><button class="b mod" data-m=2>OBST</button></div>
+      <div class=row><button class="b mod" data-m=3>SEGUIR</button><button class="b mod" data-m=4>LINEA</button></div>
+      <div class=row><button class=b id=shot>FOTO</button><button class=b id=cfgo>AJUSTES</button></div>
     </div>
     <div><div class=stick id=s2><div class=knob></div></div><div class=lab>CAMARA</div></div>
+  </div>
+  <div id=cfg>
+    <h3>AJUSTES DE CAMARA</h3>
+    <label>Resolucion <select id=c_framesize><option value=5>QVGA 320x240</option><option value=8>VGA 640x480</option><option value=9>SVGA 800x600</option></select></label>
+    <label>Calidad <input type=range id=c_quality min=10 max=40></label>
+    <label>Brillo <input type=range id=c_brightness min=-2 max=2></label>
+    <label>Contraste <input type=range id=c_contrast min=-2 max=2></label>
+    <label>Saturacion <input type=range id=c_saturation min=-2 max=2></label>
+    <label>Exposicion (valor) <input type=range id=c_aec_value min=0 max=1200></label>
+    <label>Ganancia AGC <input type=range id=c_agc_gain min=0 max=30></label>
+    <label>Espejo <input type=checkbox class=ck id=c_hmirror></label>
+    <label>Volteo <input type=checkbox class=ck id=c_vflip></label>
+    <label>Balance de blancos <input type=checkbox class=ck id=c_whitebal></label>
+    <label>Ganancia AWB <input type=checkbox class=ck id=c_awb_gain></label>
+    <label>Exposicion auto <input type=checkbox class=ck id=c_aec></label>
+    <label>Ganancia auto <input type=checkbox class=ck id=c_gain></label>
+    <button id=cfgx>CERRAR</button>
   </div>
 </div>
 <script>
@@ -124,6 +154,34 @@ setInterval(function(){
 // Red del robot: con varios repetidores no hay forma de saber a cual se engancha
 fetch('/info',{cache:'no-store'}).then(function(r){return r.text();}).then(function(t){
   document.getElementById('net').textContent=t;
+})['catch'](function(){});
+// Modos del UNO (25-28): se mandan UNA vez (el keepalive vuelve a O_STOP) y el
+// modo elegido se resalta. El UNO no reporta el modo, lo recuerda el ESP32.
+var mb=document.querySelectorAll('.mod');
+function pintaModo(m){for(var i=0;i<mb.length;i++)mb[i].className='b mod'+((i+1===m)?' on':'');}
+for(var mi=0;mi<mb.length;mi++)(function(b,m){
+  b.addEventListener('click',function(){post(24+m);cur=-1;pintaModo(m);});
+})(mb[mi],mi+1);
+document.getElementById('shot').addEventListener('click',function(){window.open('/capture','_blank');});
+// Panel de ajustes del sensor: se rellena con /status y cada cambio va a /control
+var AJ=['framesize','quality','brightness','contrast','saturation','aec_value','agc_gain','hmirror','vflip','whitebal','awb_gain','aec','gain'];
+var cfg=document.getElementById('cfg');
+document.getElementById('cfgo').addEventListener('click',function(){cfg.className='on';});
+document.getElementById('cfgx').addEventListener('click',function(){cfg.className='';});
+function ctl(v,x){fetch('/control?v='+v+'&x='+x,{cache:'no-store'})['catch'](function(){});}
+for(var ai=0;ai<AJ.length;ai++)(function(n){
+  var e=document.getElementById('c_'+n);
+  e.addEventListener('change',function(){ctl(n,e.type==='checkbox'?(e.checked?1:0):e.value);});
+})(AJ[ai]);
+fetch('/status',{cache:'no-store'}).then(function(r){return r.json();}).then(function(s){
+  for(var i=0;i<AJ.length;i++){
+    var n=AJ[i],e=document.getElementById('c_'+n),val=s[n];
+    if(n==='whitebal')val=s.awb;
+    if(n==='gain')val=s.agc;
+    if(val===undefined||val===null)continue;
+    if(e.type==='checkbox')e.checked=!!val;else e.value=val;
+  }
+  if(s.modo!==undefined)pintaModo(s.modo+1);
 })['catch'](function(){});
 </script>
 </body></html>)HTML";

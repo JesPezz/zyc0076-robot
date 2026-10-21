@@ -267,7 +267,7 @@ static void otaBegin() {
 // Al arrancar se consulta el ultimo release de GitHub; si su tag es mayor que
 // FW_VERSION se descarga el asset GH_ASSET y se flashea. No hace falta cable ni
 // subir nada al dispositivo: basta publicar un release nuevo.
-#define FW_VERSION "1.28"
+#define FW_VERSION "1.29"
 #define GH_REPO "JesPezz/zyc0076-robot"
 #define GH_ASSET "firmware.bin"
 #define UNO_ASSET_HEX "uno.hex"   // sketch del UNO ya compilado
@@ -447,6 +447,8 @@ static bool validOrder(int o) {
 static int g_distCm = -1;
 static char g_unoVer[8] = "";          // marcador de version del sketch del UNO ("V2")
 static int g_line[3] = {-1, -1, -1};   // sensores de linea A0/A1/A2 del UNO
+static int g_modo = 0;                 // 0 manual, 1 obstaculos, 2 seguir, 3 linea
+                                       // (lo recuerda el ESP32: el UNO no lo reporta)
 static void sonarRead() {
     static String line;
     while (Serial.available()) {
@@ -488,6 +490,15 @@ static void handleCtrl() {
     if (!uiServer.hasArg("o")) { uiServer.send(400, "text/plain", "falta o"); return; }
     int o = uiServer.arg("o").toInt();
     if (!validOrder(o)) { uiServer.send(400, "text/plain", "orden invalida"); return; }
+    if (o >= O_M1 && o <= O_M4) {
+        // Orden de modo: se manda UNA vez y el keepalive vuelve a O_STOP. Si se
+        // reenviara cada 200 ms el UNO reentraria en el modo y no maniobraria.
+        g_modo = o - O_M1;
+        unoOrder((uint8_t)o);
+        g_order = O_STOP;
+        uiServer.send(200, "text/plain", "ok");
+        return;
+    }
     g_remoteMs = millis();
     unoOrder((uint8_t)o);
     uiServer.send(200, "text/plain", "ok");
@@ -509,6 +520,69 @@ static void handleRst() {
 static void handleInfo() {
     uiServer.send(200, "text/plain",
                   WiFi.SSID() + " " + WiFi.localIP().toString() + " " + String(WiFi.RSSI()) + " dBm");
+}
+
+// GET /capture -> una foto JPEG suelta (el stream manda MJPEG continuo)
+static void handleCapture() {
+    camera_fb_t* fb = esp_camera_fb_get();
+    if (!fb) { uiServer.send(500, "text/plain", "sin frame"); return; }
+    uint8_t* jpg = nullptr;
+    size_t len = 0;
+    bool ok = frame2jpg(fb, 12, &jpg, &len);   // q12: mas detalle que el stream (q16)
+    esp_camera_fb_return(fb);
+    if (!ok) { uiServer.send(500, "text/plain", "no convierte"); return; }
+    uiServer.setContentLength(len);
+    uiServer.send(200, "image/jpeg", "");
+    uiServer.sendContent((const char*)jpg, len);
+    free(jpg);
+}
+
+// GET /control?v=<ajuste>&x=<valor> -> ajustes del sensor (los mismos del ejemplo
+// CameraWebServer de Arduino, que es lo que trae el firmware del fabricante).
+static void handleControl() {
+    sensor_t* s = esp_camera_sensor_get();
+    if (!s) { uiServer.send(500, "text/plain", "sin camara"); return; }
+    String v = uiServer.arg("v");
+    int x = uiServer.arg("x").toInt();
+    int rc = -1;
+    if (v == "framesize")       rc = s->set_framesize(s, (framesize_t)x);
+    else if (v == "quality")    rc = s->set_quality(s, x);
+    else if (v == "brightness") rc = s->set_brightness(s, x);
+    else if (v == "contrast")   rc = s->set_contrast(s, x);
+    else if (v == "saturation") rc = s->set_saturation(s, x);
+    else if (v == "hmirror")    rc = s->set_hmirror(s, x);
+    else if (v == "vflip")      rc = s->set_vflip(s, x);
+    else if (v == "whitebal")   rc = s->set_whitebal(s, x);
+    else if (v == "awb_gain")   rc = s->set_awb_gain(s, x);
+    else if (v == "aec")        rc = s->set_exposure_ctrl(s, x);
+    else if (v == "aec_value")  rc = s->set_aec_value(s, x);
+    else if (v == "gain")       rc = s->set_gain_ctrl(s, x);
+    else if (v == "agc_gain")   rc = s->set_agc_gain(s, x);
+    uiServer.send(200, "text/plain", v + "=" + String(x) + (rc == 0 ? " ok" : " err"));
+}
+
+// GET /status -> los ajustes actuales, para que la pagina ponga los deslizadores
+// donde toca al abrirse.
+static void handleStatus() {
+    sensor_t* s = esp_camera_sensor_get();
+    if (!s) { uiServer.send(500, "text/plain", "sin camara"); return; }
+    String j = "{";
+    j += "\"modo\":" + String(g_modo);
+    j += ",\"framesize\":" + String(s->status.framesize);
+    j += ",\"quality\":" + String(s->status.quality);
+    j += ",\"brightness\":" + String(s->status.brightness);
+    j += ",\"contrast\":" + String(s->status.contrast);
+    j += ",\"saturation\":" + String(s->status.saturation);
+    j += ",\"hmirror\":" + String(s->status.hmirror);
+    j += ",\"vflip\":" + String(s->status.vflip);
+    j += ",\"whitebal\":" + String(s->status.awb);
+    j += ",\"awb_gain\":" + String(s->status.awb_gain);
+    j += ",\"aec\":" + String(s->status.aec);
+    j += ",\"aec_value\":" + String(s->status.aec_value);
+    j += ",\"gain\":" + String(s->status.agc);
+    j += ",\"agc_gain\":" + String(s->status.agc_gain);
+    j += "}";
+    uiServer.send(200, "application/json", j);
 }
 
 static void handleRoot() {
@@ -889,6 +963,9 @@ static void httpBegin() {
     uiServer.on("/unoprobe", HTTP_GET, handleUnoProbe);
     uiServer.on("/unoupdate", HTTP_GET, handleUnoUpdate);
     uiServer.on("/info", HTTP_GET, handleInfo);
+    uiServer.on("/capture", HTTP_GET, handleCapture);
+    uiServer.on("/control", HTTP_GET, handleControl);
+    uiServer.on("/status", HTTP_GET, handleStatus);
     uiServer.on("/rxscan", HTTP_GET, handleRxScan);
     uiServer.on("/rxbytes", HTTP_GET, handleRxBytes);
     uiServer.on("/updateuno", HTTP_POST, unoOtaDone, unoOtaUpload);
