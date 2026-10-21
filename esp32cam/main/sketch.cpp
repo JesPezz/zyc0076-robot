@@ -267,7 +267,7 @@ static void otaBegin() {
 // Al arrancar se consulta el ultimo release de GitHub; si su tag es mayor que
 // FW_VERSION se descarga el asset GH_ASSET y se flashea. No hace falta cable ni
 // subir nada al dispositivo: basta publicar un release nuevo.
-#define FW_VERSION "1.20"
+#define FW_VERSION "1.22"
 #define GH_REPO "JesPezz/zyc0076-robot"
 #define GH_ASSET "firmware.bin"
 
@@ -536,21 +536,41 @@ static int g_unoRx = 0;
 static bool unoEntrarBootloader() {
     g_unoBusy = true;
     g_unoRx = 0;
-    // Mismo camino que /unoprobe, que es el que funciona de verdad: un pulso y un
-    // unico sync. Con el bucle propio no habia respuesta (rx=0) en la misma placa.
+    // Misma secuencia que /unoprobe, que es la que entra de verdad: parar el
+    // keepalive, dejar que el UNO se calle y solo entonces pulsar el RESET.
+    // Pulsando en frio (como hacia antes) optiboot no contesta nunca.
+    unoOrder(O_STOP);
+    delay(50);
+    unoSend(O_STOP);
+    while (Serial.available()) Serial.read();
+    unsigned long t0 = millis();
+    while (millis() - t0 < 500) {
+        if (Serial.available()) Serial.read();
+        else delay(1);
+    }
     int ms = 0;
-    if (!bootloaderSync(UNO_RST_PIN, &ms)) { g_unoBusy = false; return false; }
+    bool ok = bootloaderSync(UNO_RST_PIN, &ms);
+    if (!ok) {  // por si el cable acabo en otro GPIO: la serigrafia del cabezal enganya
+        for (unsigned i = 0; i < sizeof(RST_CAND); i++) {
+            if (RST_CAND[i] == UNO_RST_PIN) continue;
+            if (bootloaderSync(RST_CAND[i], &ms)) { ok = true; break; }
+        }
+    }
+    if (!ok) { g_unoBusy = false; return false; }
     delay(20);
     while (Serial.available()) Serial.read();       // el 0x10 (OK) que sigue al INSYNC
     const uint8_t prog[2] = {0x50, 0x20};          // enter progmode
     return stkCmd(prog, 2);
 }
 
+static unsigned g_unoFallo = 0;   // ultima pagina intentada (para el mensaje de error)
+
 static bool unoPagina(unsigned addr, const uint8_t* data) {
+    g_unoFallo = addr;
     uint8_t cmd[4] = {0x55, (uint8_t)((addr >> 1) & 0xFF), (uint8_t)((addr >> 9) & 0xFF), 0x20};
     if (!stkCmd(cmd, 4)) return false;
-    const uint8_t hdr[2] = {0x64, 0x7F};           // prog page, 128 bytes
-    Serial.write(hdr, 2);
+    const uint8_t hdr[3] = {0x64, 0x00, 0x80};     // prog page 128 B: DOS bytes de longitud (STK500v1)
+    Serial.write(hdr, 3);
     Serial.write((uint8_t)'F');
     Serial.write(data, 128);
     Serial.write((uint8_t)0x20);
@@ -617,7 +637,7 @@ static void unoOtaDone() {
     if (!g_unoHex.length()) { uiServer.send(400, "text/plain", "sin fichero"); return; }
     String res = "no entra al bootloader (rx=" + String(g_unoRx) + ")";
     if (unoEntrarBootloader()) {
-        res = "FALLO al programar";
+        res = "FALLO al programar (pagina 0x" + String(g_unoFallo, HEX) + ")";
         if (unoProgramarHex(g_unoHex)) {
             const uint8_t leave[2] = {0x51, 0x20};  // leave progmode: arranca el sketch nuevo
             res = stkCmd(leave, 2) ? "OK" : "programado, pero no arranca";
