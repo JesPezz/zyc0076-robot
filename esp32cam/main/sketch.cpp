@@ -267,7 +267,7 @@ static void otaBegin() {
 // Al arrancar se consulta el ultimo release de GitHub; si su tag es mayor que
 // FW_VERSION se descarga el asset GH_ASSET y se flashea. No hace falta cable ni
 // subir nada al dispositivo: basta publicar un release nuevo.
-#define FW_VERSION "1.19"
+#define FW_VERSION "1.20"
 #define GH_REPO "JesPezz/zyc0076-robot"
 #define GH_ASSET "firmware.bin"
 
@@ -322,8 +322,12 @@ static String releaseBinUrl() {
 }
 
 static void otaDesdeRelease() {
+    BP32.enableNewBluetoothConnections(false);  // el escaneo BT se come aire del WiFi
     String url = releaseBinUrl();
-    if (url.isEmpty()) return;
+    if (url.isEmpty()) {
+        BP32.enableNewBluetoothConnections(true);
+        return;
+    }
 
     Serial.printf("OTA: actualizando desde %s\n", url.c_str());
     unoSend(O_STOP);  // el UNO mantiene la ultima orden: parar antes del bloqueo
@@ -336,6 +340,7 @@ static void otaDesdeRelease() {
     HTTPClient https;
     if (!https.begin(client, url)) {
         Serial.println("OTA: no se pudo abrir la descarga");
+        BP32.enableNewBluetoothConnections(true);
         gestoOta();
         return;
     }
@@ -345,6 +350,7 @@ static void otaDesdeRelease() {
     if (code != HTTP_CODE_OK || len <= 0) {
         Serial.printf("OTA: descarga HTTP %d, tamano %d\n", code, len);
         https.end();
+        BP32.enableNewBluetoothConnections(true);
         gestoOta();
         return;
     }
@@ -358,6 +364,7 @@ static void otaDesdeRelease() {
         Serial.printf("OTA: Update.begin fallo (%s)\n", Update.errorString());
     }
     https.end();
+    BP32.enableNewBluetoothConnections(true);  // se acabo la descarga: vuelve el escaneo
 
     gestoOta();  // aviso: termino la actualizacion
     if (ok) {
@@ -715,6 +722,7 @@ static void handleRxBytes() {
 
 // OTA manual: el PC sube el binario con `curl -F firmware=@firmware.bin /update`.
 static void httpUpdateDone() {
+    BP32.enableNewBluetoothConnections(true);   // si falla, que el mando pueda engancharse
     uiServer.send(200, "text/plain", Update.hasError() ? "FAIL" : "OK");
     delay(300);
     ESP.restart();
@@ -723,6 +731,8 @@ static void httpUpdateDone() {
 static void httpUpdateUpload() {
     HTTPUpload& up = uiServer.upload();
     if (up.status == UPLOAD_FILE_START) {
+        // sin escaneo BT: la radio es la misma y el aire se reparte
+        BP32.enableNewBluetoothConnections(false);
         if (!Update.begin(UPDATE_SIZE_UNKNOWN)) Update.printError(Serial);
     } else if (up.status == UPLOAD_FILE_WRITE) {
         if (Update.write(up.buf, up.currentSize) != up.currentSize) Update.printError(Serial);
