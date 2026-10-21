@@ -16,6 +16,7 @@
 #include "driver/ledc.h"
 #include "esp_sleep.h"
 #include "web.h"
+#include <Preferences.h>  // copia del log a NVS cuando el arranque viene de un crash
 
 // ---------------------------------------------------------------- enlace UNO
 #define UNO_HDR 0xA5
@@ -41,15 +42,12 @@ static inline void unoSend(uint8_t order) {
 
 // Aviso visible moviendo el servo: barre a un lado, al otro y vuelve al centro.
 static void gestoOta() {
-    for (int i = 0; i < 25; i++) { unoSend(O_SVL); delay(20); }
-    for (int i = 0; i < 50; i++) { unoSend(O_SVR); delay(20); }
-    for (int i = 0; i < 25; i++) { unoSend(O_SVL); delay(20); }
+    // un solo barrido de servo y un destello suave: aviso de inicio y fin de OTA
+    for (int i = 0; i < 45; i++) { unoSend(O_SVL); delay(20); }
+    for (int i = 0; i < 45; i++) { unoSend(O_SVR); delay(20); }
     unoSend(O_SVC);
-    // aviso luminoso: 3 destellos del LED de iluminacion (inicio y fin de la OTA)
-    for (int i = 0; i < 3; i++) {
-        digitalWrite(LED_PIN, HIGH); delay(150);
-        digitalWrite(LED_PIN, LOW);  delay(150);
-    }
+    digitalWrite(LED_PIN, HIGH); delay(600);
+    digitalWrite(LED_PIN, LOW);
 }
 
 // ---------------------------------------------------------------------- red
@@ -267,7 +265,7 @@ static void otaBegin() {
 // Al arrancar se consulta el ultimo release de GitHub; si su tag es mayor que
 // FW_VERSION se descarga el asset GH_ASSET y se flashea. No hace falta cable ni
 // subir nada al dispositivo: basta publicar un release nuevo.
-#define FW_VERSION "1.29"
+#define FW_VERSION "1.30"
 #define GH_REPO "JesPezz/zyc0076-robot"
 #define GH_ASSET "firmware.bin"
 #define UNO_ASSET_HEX "uno.hex"   // sketch del UNO ya compilado
@@ -447,7 +445,31 @@ static bool validOrder(int o) {
 static int g_distCm = -1;
 static char g_unoVer[8] = "";          // marcador de version del sketch del UNO ("V2")
 static int g_line[3] = {-1, -1, -1};   // sensores de linea A0/A1/A2 del UNO
-static int g_modo = 0;                 // 0 manual, 1 obstaculos, 2 seguir, 3 linea
+static int g_modo = 0;
+
+// --- registro en memoria RTC: sobrevive a los reinicios (no a un corte de corriente)
+#include <stdarg.h>
+#define LOG_SZ 6000
+#define LOG_MAGIC 0x5A434C47u
+RTC_NOINIT_ATTR static char g_log[LOG_SZ];
+RTC_NOINIT_ATTR static uint32_t g_logMagic, g_logHead, g_logLen;
+
+static void logf(const char* fmt, ...) {
+    char b[160];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(b, sizeof(b), fmt, ap);
+    va_end(ap);
+    if (n <= 0) return;
+    if (n > (int)sizeof(b) - 1) n = sizeof(b) - 1;
+    if (g_logMagic != LOG_MAGIC) { g_logMagic = LOG_MAGIC; g_logHead = 0; g_logLen = 0; }
+    for (int i = 0; i < n; i++) {
+        g_log[g_logHead] = b[i];
+        g_logHead = (g_logHead + 1) % LOG_SZ;
+        if (g_logLen < LOG_SZ) g_logLen++;
+    }
+    if (!g_unoBusy) Serial.write((const uint8_t*)b, n);   // y tambien por el puerto serie
+}                 // 0 manual, 1 obstaculos, 2 seguir, 3 linea
                                        // (lo recuerda el ESP32: el UNO no lo reporta)
 static void sonarRead() {
     static String line;
@@ -585,6 +607,30 @@ static void handleStatus() {
     uiServer.send(200, "application/json", j);
 }
 
+// GET /log -> registro guardado en memoria RTC (sobrevive a los reinicios)
+static void handleLog() {
+    static char buf[LOG_SZ];                 // 6 KB en BSS: no cabe en la pila
+    String out;
+    if (uiServer.hasArg("prev")) {           // copia guardada en NVS tras un crash
+        Preferences p;
+        if (p.begin("crashlog", true)) {
+            uint32_t len = p.getUInt("len", 0), head = p.getUInt("head", 0);
+            if (p.getBytes("prev", buf, LOG_SZ) == LOG_SZ) {
+                if (len > LOG_SZ) len = LOG_SZ;
+                out.reserve(len + 1);
+                for (uint32_t i = 0; i < len; i++) out += buf[(head + LOG_SZ - len + i) % LOG_SZ];
+            }
+            p.end();
+        }
+        uiServer.send(200, "text/plain", out.length() ? out : String("(sin copia de crash)"));
+        return;
+    }
+    out.reserve(g_logLen + 1);
+    for (uint32_t i = 0; i < g_logLen; i++)
+        out += g_log[(g_logHead + LOG_SZ - g_logLen + i) % LOG_SZ];
+    uiServer.send(200, "text/plain", out);
+}
+
 static void handleRoot() {
     String html = FPSTR(PAGE_HTML);
     html.replace("%V%", FW_VERSION);  // la pagina muestra v1.4, v1.5, ...
@@ -605,7 +651,9 @@ static void handleSleep() {
     int m = uiServer.hasArg("m") ? uiServer.arg("m").toInt() : 10;
     if (m < 1) m = 1;
     if (m > 180) m = 180;
-    unoOrder(O_STOP);   // que el UNO no se quede con la ultima marcha
+    unoOrder(O_M1);     // en automatico el UNO conduce solo: primero a manual
+    delay(50);
+    unoOrder(O_STOP);   // y ahora si, parado
     delay(50);
     unoSend(O_STOP);
     digitalWrite(LED_PIN, LOW);
@@ -963,6 +1011,7 @@ static void httpBegin() {
     uiServer.on("/unoprobe", HTTP_GET, handleUnoProbe);
     uiServer.on("/unoupdate", HTTP_GET, handleUnoUpdate);
     uiServer.on("/info", HTTP_GET, handleInfo);
+    uiServer.on("/log", HTTP_GET, handleLog);
     uiServer.on("/capture", HTTP_GET, handleCapture);
     uiServer.on("/control", HTTP_GET, handleControl);
     uiServer.on("/status", HTTP_GET, handleStatus);
@@ -976,6 +1025,19 @@ static void httpBegin() {
 // --------------------------------------------------------------- arduino api
 void setup() {
     Serial.begin(115200);
+    // La RAM RTC sobrevive a reinicios pero no a un corte de bateria: si venimos de
+    // un crash, guarda el anillo anterior en NVS (una escritura por incidencia).
+    esp_reset_reason_t rr = esp_reset_reason();
+    if (rr == ESP_RST_PANIC || rr == ESP_RST_TASK_WDT || rr == ESP_RST_INT_WDT || rr == ESP_RST_WDT) {
+        Preferences p;
+        if (p.begin("crashlog", false)) {
+            p.putBytes("prev", g_log, LOG_SZ);
+            p.putUInt("head", g_logHead);
+            p.putUInt("len", g_logLen);
+            p.end();
+        }
+    }
+    logf("\n== arranque: reason=%d heap=%u ==\n", (int)rr, (unsigned)ESP.getFreeHeap());
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);  // arranca apagado: se enciende desde la pagina (LUZ)
     unoSend(O_STOP);
@@ -1007,5 +1069,10 @@ void loop() {
     static unsigned long last = 0;
     if (!g_unoBusy && millis() - last > 200) { last = millis(); unoSend(g_order); }
 
-    delay(10);
+    static unsigned long lastHb = 0;
+    if (millis() - lastHb > 30000) {
+        lastHb = millis();
+        logf("hb %lus heap=%u wifi=%d modo=%d\n", millis() / 1000, (unsigned)ESP.getFreeHeap(), (int)WiFi.status(), g_modo);
+    }
+    delay(2);
 }

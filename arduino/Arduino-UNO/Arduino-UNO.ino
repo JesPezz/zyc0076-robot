@@ -382,8 +382,11 @@ float SR04(int Trig, int Echo)      // ultrasonic measured distance
     digitalWrite(Trig, HIGH);
     delayMicroseconds(10);
     digitalWrite(Trig, LOW);
-    // 25 ms de tope (~4 m): sin eco, el defecto de pulseIn es 1 s y bloquea el bucle
-    float distance = pulseIn(Echo, HIGH, 25000) / 58.00;
+    // 25 ms de tope (~4 m): sin eco, el defecto de pulseIn es 1 s y bloquea el bucle.
+    // Sin eco pulseIn devuelve 0, y 0 cm se leia como "pared pegada": los modos
+    // automaticos frenaban y giraban sin motivo. 999 = no hay nada delante.
+    unsigned long us = pulseIn(Echo, HIGH, 25000);
+    float distance = (us == 0) ? 999.0 : us / 58.00;
     delay(10);
     
     return distance;
@@ -398,7 +401,7 @@ void reportSensors()
     last = millis();
     Serial.print(F("D:"));
     Serial.print((int)SR04(Trig_PIN, Echo_PIN));
-    Serial.println(F(" V3"));  // marca de version: se ve en el conteo de bytes de /unoprobe
+    Serial.println(F(" V4"));  // marca de version: se ve en el conteo de bytes de /unoprobe
     Serial.print(F("L:"));
     Serial.print(analogRead(LEFT_LINE_TRACJING));
     Serial.print(F(","));
