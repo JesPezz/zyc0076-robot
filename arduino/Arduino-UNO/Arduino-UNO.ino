@@ -398,7 +398,7 @@ void reportSensors()
     last = millis();
     Serial.print(F("D:"));
     Serial.print((int)SR04(Trig_PIN, Echo_PIN));
-    Serial.println(F(" V2"));  // marca de version: se ve en el conteo de bytes de /unoprobe
+    Serial.println(F(" V3"));  // marca de version: se ve en el conteo de bytes de /unoprobe
     Serial.print(F("L:"));
     Serial.print(analogRead(LEFT_LINE_TRACJING));
     Serial.print(F(","));

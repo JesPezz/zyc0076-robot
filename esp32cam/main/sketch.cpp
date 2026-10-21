@@ -267,9 +267,11 @@ static void otaBegin() {
 // Al arrancar se consulta el ultimo release de GitHub; si su tag es mayor que
 // FW_VERSION se descarga el asset GH_ASSET y se flashea. No hace falta cable ni
 // subir nada al dispositivo: basta publicar un release nuevo.
-#define FW_VERSION "1.27"
+#define FW_VERSION "1.28"
 #define GH_REPO "JesPezz/zyc0076-robot"
 #define GH_ASSET "firmware.bin"
+#define UNO_ASSET_HEX "uno.hex"   // sketch del UNO ya compilado
+#define UNO_ASSET_VER "uno.txt"   // version que ese .hex deja en el UNO (el marcador " Vn")
 
 // "v1.10" -> 1010, "1.0" -> 1000. Si el tag no parsea devuelve 0 (no actualiza).
 static int versionNum(const String& v) {
@@ -320,6 +322,7 @@ static bool githubGet(const String& url, String& body) {
         if (!https.begin(client, url)) { delay(800); continue; }
         https.addHeader("User-Agent", "zyc0076");
         https.addHeader("Accept", "application/vnd.github+json");
+        https.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);  // los assets viven en github.com y redirigen
         int code = https.GET();
         if (code == HTTP_CODE_OK) {
             body = https.getString();
@@ -333,36 +336,50 @@ static bool githubGet(const String& url, String& body) {
     return false;
 }
 
-static String releaseBinUrl() {
+// Un release lleva tres assets: firmware.bin (ESP32), uno.hex (UNO) y uno.txt
+// (version que ese .hex deja en el UNO). Se piden todos de una vez: cada GET
+// son ~2 s de TLS y el robot solo tiene un momento bueno al arrancar.
+struct Release {
+    String tag;
+    String espUrl;
+    String unoHexUrl;
+    String unoVerUrl;
+};
+
+static bool releaseFetch(Release& r) {
     static const char TAG_KEY[] = "\"tag_name\":\"";
     static const char URL_KEY[] = "\"browser_download_url\":\"";
 
     String body;
     String api = String("https://api.github.com/repos/") + GH_REPO + "/releases/latest";
-    if (!githubGet(api, body)) return "";
+    if (!githubGet(api, body)) return false;
 
     int p = body.indexOf(TAG_KEY);
-    if (p < 0) return "";
+    if (p < 0) return false;
     p += strlen(TAG_KEY);
-    String tag = body.substring(p, body.indexOf('"', p));
-    if (versionNum(tag) <= versionNum(FW_VERSION)) {
-        Serial.printf("OTA: al dia (%s <= v%s)\n", tag.c_str(), FW_VERSION);
-        return "";
-    }
+    r.tag = body.substring(p, body.indexOf('"', p));
 
     for (int q = body.indexOf(URL_KEY); q >= 0; q = body.indexOf(URL_KEY, q + 1)) {
         q += strlen(URL_KEY);
         String u = body.substring(q, body.indexOf('"', q));
-        if (u.endsWith(GH_ASSET)) return u;
+        if (u.endsWith("/" GH_ASSET)) r.espUrl = u;
+        else if (u.endsWith("/" UNO_ASSET_HEX)) r.unoHexUrl = u;
+        else if (u.endsWith("/" UNO_ASSET_VER)) r.unoVerUrl = u;
     }
-    Serial.printf("OTA: release %s sin %s\n", tag.c_str(), GH_ASSET);
-    return "";
+    return true;
 }
 
 static void otaDesdeRelease() {
     BP32.enableNewBluetoothConnections(false);  // el escaneo BT se come aire del WiFi
-    String url = releaseBinUrl();
+    Release rel;
+    if (!releaseFetch(rel) || versionNum(rel.tag) <= versionNum(FW_VERSION)) {
+        Serial.printf("OTA: al dia (v%s <= v%s)\n", rel.tag.c_str(), FW_VERSION);
+        BP32.enableNewBluetoothConnections(true);
+        return;
+    }
+    String url = rel.espUrl;
     if (url.isEmpty()) {
+        Serial.printf("OTA: release %s sin %s\n", rel.tag.c_str(), GH_ASSET);
         BP32.enableNewBluetoothConnections(true);
         return;
     }
@@ -426,16 +443,24 @@ static bool validOrder(int o) {
     }
 }
 
-// Sonar: el UNO manda "D:<cm>" por la misma UART de las ordenes (solo en manual).
+// Sonar: el UNO manda "D:<cm> Vn" por la misma UART de las ordenes (solo en manual).
 static int g_distCm = -1;
+static char g_unoVer[8] = "";          // marcador de version del sketch del UNO ("V2")
 static int g_line[3] = {-1, -1, -1};   // sensores de linea A0/A1/A2 del UNO
 static void sonarRead() {
     static String line;
     while (Serial.available()) {
         char c = (char)Serial.read();
         if (c == '\n') {
-            if (line.startsWith("D:")) g_distCm = line.substring(2).toInt();
-            else if (line.startsWith("L:")) {
+            if (line.startsWith("D:")) {
+                const char* s = line.c_str() + 2;
+                g_distCm = atoi(s);
+                const char* sp = strchr(s, ' ');
+                if (sp) {
+                    strncpy(g_unoVer, sp + 1, sizeof(g_unoVer) - 1);
+                    g_unoVer[sizeof(g_unoVer) - 1] = 0;
+                }
+            } else if (line.startsWith("L:")) {
                 int a, b, d;
                 if (sscanf(line.c_str() + 2, "%d,%d,%d", &a, &b, &d) == 3) {
                     g_line[0] = a; g_line[1] = b; g_line[2] = d;
@@ -686,6 +711,59 @@ static void unoOtaDone() {
     uiServer.send(200, "text/plain", res);
 }
 
+// Actualiza el UNO desde el release: compara la version que el UNO reporta por
+// serie (" Vn") con la del asset uno.txt y, si no coinciden, le manda uno.hex.
+// Si el UNO no habla no se toca nada: no se puede programar lo que no responde.
+static bool unoDesdeRelease() {
+    for (int i = 0; i < 60 && !g_unoVer[0]; i++) { sonarRead(); delay(20); }
+    if (!g_unoVer[0]) { Serial.println("UNO: no reporta version, no se toca"); return false; }
+
+    BP32.enableNewBluetoothConnections(false);
+    Release rel;
+    if (!releaseFetch(rel) || rel.unoHexUrl.isEmpty() || rel.unoVerUrl.isEmpty()) {
+        Serial.printf("UNO: release %s sin %s/%s\n", rel.tag.c_str(), UNO_ASSET_HEX, UNO_ASSET_VER);
+        BP32.enableNewBluetoothConnections(true);
+        return false;
+    }
+
+    String ver;
+    if (!githubGet(rel.unoVerUrl, ver)) { BP32.enableNewBluetoothConnections(true); return false; }
+    ver.trim();
+    if (ver == g_unoVer) {
+        Serial.printf("UNO: al dia (%s)\n", g_unoVer);
+        BP32.enableNewBluetoothConnections(true);
+        return false;
+    }
+
+    String hex;
+    if (!githubGet(rel.unoHexUrl, hex)) {
+        Serial.println("UNO: no se pudo bajar el .hex");
+        BP32.enableNewBluetoothConnections(true);
+        return false;
+    }
+    Serial.printf("UNO: actualizando %s -> %s (%u bytes)\n", g_unoVer, ver.c_str(), (unsigned)hex.length());
+    BP32.enableNewBluetoothConnections(true);   // el .hex ya esta en RAM: vuelve el escaneo
+
+    gestoOta();
+    bool ok = false;
+    if (unoEntrarBootloader()) {
+        ok = unoProgramarHex(hex);
+        if (ok) {
+            const uint8_t leave[2] = {0x51, 0x20};
+            ok = stkCmd(leave, 2);
+        }
+    }
+    g_unoBusy = false;
+    gestoOta();
+    Serial.println(ok ? "UNO: OK" : "UNO: fallo al programar");
+    return ok;
+}
+
+static void handleUnoUpdate() {
+    uiServer.send(200, "text/plain", "comprobando el release (tarda ~1 min)...");
+    unoDesdeRelease();
+}
+
 static void handleUnoProbe() {
     unoOrder(O_STOP);   // el UNO va a reiniciarse: que no quede marcha puesta
     delay(50);
@@ -809,6 +887,7 @@ static void httpBegin() {
     uiServer.on("/ledoff", HTTP_GET, handleLed);
     uiServer.on("/sleep", HTTP_GET, handleSleep);
     uiServer.on("/unoprobe", HTTP_GET, handleUnoProbe);
+    uiServer.on("/unoupdate", HTTP_GET, handleUnoUpdate);
     uiServer.on("/info", HTTP_GET, handleInfo);
     uiServer.on("/rxscan", HTTP_GET, handleRxScan);
     uiServer.on("/rxbytes", HTTP_GET, handleRxBytes);
@@ -834,6 +913,7 @@ void setup() {
         otaBegin();
         httpBegin();
         otaDesdeRelease();  // busca release solo al arrancar (antes de la camara: el TLS necesita heap)
+        unoDesdeRelease();  // si el ESP32 no se reinicio, mira si el UNO esta al dia
     }
     g_camOk = cameraInit();
     if (g_camOk) camBegin();
