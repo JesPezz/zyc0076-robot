@@ -219,45 +219,21 @@ void model2_func()      // OA
             }
         }
         else if(rightDistance < leftDistance) {
-            Motor(Stop, 0);
-            for(int i = 0;i < 100;i++){
+            // v1.31 ruedas omnidireccionales: con hueco a la izquierda se desliza
+            // en diagonal hacia alli (Top_Left) sin girar sobre el eje; se avanza
+            // de lado manteniendo el morro hacia el pasillo.
+            Motor(Top_Left, 200);
+            for(int i = 0;i < 600;i++){
               delay(1);
               RXpack_func();
               if(model_var != 1)
                 return ;
             }
-            Motor(Backward, 180);
-            for(int i = 0;i < 500;i++){
-              delay(1);
-              RXpack_func();
-              if(model_var != 1)
-                return ;
-            }
-            Motor(Counterclockwise, 250);
-            for(int i = 0;i < 500;i++){
-              delay(1);
-              RXpack_func();
-              if(model_var != 1)
-                return ;
-            }
-        }//turn right
+        }
         else if(rightDistance > leftDistance){
-            Motor(Stop, 0);
-            for(int i = 0;i < 500;i++){
-              delay(1);
-              RXpack_func();
-              if(model_var != 1)
-                return ;
-            }
-            Motor(Backward, 180);
-            for(int i = 0;i < 500;i++){
-              delay(1);
-              RXpack_func();
-              if(model_var != 1)
-                return ;
-            }
-            Motor(Clockwise, 250); 
-            for(int i = 0;i < 500;i++){
+            // mismo criterio por la derecha (Top_Right)
+            Motor(Top_Right, 200);
+            for(int i = 0;i < 600;i++){
               delay(1);
               RXpack_func();
               if(model_var != 1)
@@ -401,7 +377,7 @@ void reportSensors()
     last = millis();
     Serial.print(F("D:"));
     Serial.print((int)SR04(Trig_PIN, Echo_PIN));
-    Serial.println(F(" V4"));  // marca de version: se ve en el conteo de bytes de /unoprobe
+    Serial.println(F(" V5"));  // marca de version: se ve en el conteo de bytes de /unoprobe
     Serial.print(F("L:"));
     Serial.print(analogRead(LEFT_LINE_TRACJING));
     Serial.print(F(","));

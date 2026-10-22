@@ -265,7 +265,7 @@ static void otaBegin() {
 // Al arrancar se consulta el ultimo release de GitHub; si su tag es mayor que
 // FW_VERSION se descarga el asset GH_ASSET y se flashea. No hace falta cable ni
 // subir nada al dispositivo: basta publicar un release nuevo.
-#define FW_VERSION "1.30"
+#define FW_VERSION "1.31"
 #define GH_REPO "JesPezz/zyc0076-robot"
 #define GH_ASSET "firmware.bin"
 #define UNO_ASSET_HEX "uno.hex"   // sketch del UNO ya compilado
@@ -631,6 +631,20 @@ static void handleLog() {
     uiServer.send(200, "text/plain", out);
 }
 
+// GET /checkupdate -> consulta el release y actualiza al momento (boton ACT.)
+static void handleCheckupdate() {
+    Release r;
+    if (!releaseFetch(r)) { uiServer.send(200, "text/plain", "sin datos del release"); return; }
+    if (versionNum(r.tag) <= versionNum(FW_VERSION)) {
+        uiServer.send(200, "text/plain", "al dia (" + r.tag + ")");
+        return;
+    }
+    uiServer.send(200, "text/plain", "actualizando a " + r.tag + "...");
+    uiServer.client().flush();
+    delay(300);
+    otaDesdeRelease();
+}
+
 static void handleRoot() {
     String html = FPSTR(PAGE_HTML);
     html.replace("%V%", FW_VERSION);  // la pagina muestra v1.4, v1.5, ...
@@ -656,6 +670,16 @@ static void handleSleep() {
     unoOrder(O_STOP);   // y ahora si, parado
     delay(50);
     unoSend(O_STOP);
+    logf("reposo %d min: M1+STOP enviados\n", m);
+    // v1.31: en modo automatico el UNO solo lee la UART dentro de sus delays, asi
+    // que un unico par de paquetes se pierde. Tres rondas espaciadas.
+    for (int i = 0; i < 3; i++) {
+        delay(250);
+        unoSend(O_M1);
+        delay(50);
+        unoSend(O_STOP);
+    }
+    delay(100);
     digitalWrite(LED_PIN, LOW);
     char msg[24];
     snprintf(msg, sizeof(msg), "durmiendo %d min", m);
@@ -1012,6 +1036,7 @@ static void httpBegin() {
     uiServer.on("/unoupdate", HTTP_GET, handleUnoUpdate);
     uiServer.on("/info", HTTP_GET, handleInfo);
     uiServer.on("/log", HTTP_GET, handleLog);
+    uiServer.on("/checkupdate", HTTP_GET, handleCheckupdate);
     uiServer.on("/capture", HTTP_GET, handleCapture);
     uiServer.on("/control", HTTP_GET, handleControl);
     uiServer.on("/status", HTTP_GET, handleStatus);

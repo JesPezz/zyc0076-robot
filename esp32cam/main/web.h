@@ -59,7 +59,7 @@ html,body{margin:0;height:100%;background:#101214;color:#eee;font:14px system-ui
       <button class=b id=stop>STOP</button>
       <div class=row><button class="b mod" data-m=1>MANUAL</button><button class="b mod" data-m=2>OBST</button></div>
       <div class=row><button class="b mod" data-m=3>SEGUIR</button><button class="b mod" data-m=4>LINEA</button></div>
-      <div class=row><button class=b id=shot>FOTO</button><button class=b id=cfgo>AJUSTES</button><button class=b id=lg>LOG</button></div>
+      <div class=row><button class=b id=shot>FOTO</button><button class=b id=cfgo>AJUSTES</button><button class=b id=lg>LOG</button><button class=b id=upd>ACT.</button></div>
     </div>
     <div><div class=stick id=s2><div class=knob></div></div><div class=lab>CAMARA</div></div>
   </div>
@@ -169,6 +169,7 @@ var cfg=document.getElementById('cfg');
 document.getElementById('cfgo').addEventListener('click',function(){cfg.className='on';});
 // Log del arranque y de los reinicios: se puede abrir desde cualquier navegador
 document.getElementById('lg').addEventListener('click',function(){window.open('/log','_blank');});
+document.getElementById('upd').addEventListener('click',function(){window.open('/checkupdate','_blank');});
 document.getElementById('cfgx').addEventListener('click',function(){cfg.className='';});
 function ctl(v,x){fetch('/control?v='+v+'&x='+x,{cache:'no-store'})['catch'](function(){});}
 for(var ai=0;ai<AJ.length;ai++)(function(n){
