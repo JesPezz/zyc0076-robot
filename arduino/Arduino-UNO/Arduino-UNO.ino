@@ -161,10 +161,9 @@ void model2_func()      // OA
 {
     MOTORservo.write(90);
     UT_distance = SR04(Trig_PIN, Echo_PIN);
-    Serial.println(UT_distance);
     middleDistance = UT_distance;
 
-    if (middleDistance <= 25) 
+    if (middleDistance <= 40) 
     {
         Motor(Stop, 0);
         for(int i = 0;i < 500;i++){
@@ -181,8 +180,6 @@ void model2_func()      // OA
             return ;
         }
         rightDistance = SR04(Trig_PIN, Echo_PIN);//SR04();
-        Serial.print("rightDistance:  ");
-        Serial.println(rightDistance);
         MOTORservo.write(90);
         for(int i = 0;i < 300;i++){
           delay(1);
@@ -198,8 +195,6 @@ void model2_func()      // OA
             return ;
         }
         leftDistance = SR04(Trig_PIN, Echo_PIN);//SR04();
-        Serial.print("leftDistance:  ");
-        Serial.println(leftDistance);
         MOTORservo.write(90);
         if((rightDistance < 20) && (leftDistance < 20)){
 
@@ -259,7 +254,37 @@ void model2_func()      // OA
     }
     else 
     {
-        Motor(Forward, 250);
+        // v1.33: si manda avanzar y el sonar no cambia (atasco con un objeto
+        // mas bajo que el sensor) durante ~2 s, o si los sensores de linea ven
+        // algo oscuro, retrocede y gira para desatascarse.
+        static int lastDist = -1;
+        static int stuck = 0;
+        bool lineaNegra = (analogRead(LEFT_LINE_TRACJING) < Black_Line) ||
+                          (analogRead(CENTER_LINE_TRACJING) < Black_Line) ||
+                          (analogRead(RIGHT_LINE_TRACJING) < Black_Line);
+        if (lastDist >= 0 && abs(UT_distance - lastDist) < 3) stuck++;
+        else stuck = 0;
+        lastDist = UT_distance;
+        if (stuck > 20 || lineaNegra) {
+            Motor(Backward, 180);
+            for(int i = 0;i < 700;i++){
+              delay(1);
+              RXpack_func();
+              if(model_var != 1)
+                return ;
+            }
+            Motor(Counterclockwise, 250);
+            for(int i = 0;i < 600;i++){
+              delay(1);
+              RXpack_func();
+              if(model_var != 1)
+                return ;
+            }
+            stuck = 0;
+            lastDist = -1;
+        } else {
+            Motor(Forward, 250);
+        }
     }
 }
 
@@ -377,7 +402,7 @@ void reportSensors()
     last = millis();
     Serial.print(F("D:"));
     Serial.print((int)SR04(Trig_PIN, Echo_PIN));
-    Serial.println(F(" V5"));  // marca de version: se ve en el conteo de bytes de /unoprobe
+    Serial.println(F(" V6"));  // marca de version: se ve en el conteo de bytes de /unoprobe
     Serial.print(F("L:"));
     Serial.print(analogRead(LEFT_LINE_TRACJING));
     Serial.print(F(","));
