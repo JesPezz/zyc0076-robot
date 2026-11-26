@@ -222,31 +222,13 @@ static void camBegin() {
 static void wifiConnect() {
     WiFi.mode(WIFI_STA);
     WiFi.setSleep(false);  // modem sleep anade ~100 ms de latencia al stream MJPEG
-    // La antena del ESP32-CAM dentro del robot llega muy justa: se elige la red
-    // conocida con mejor senal, no la primera de la tabla (un repetidor cercano
-    // puede ir mejor que el router).
+    // v1.32: se prueban en el ORDEN de NETS[] (INFINITUM181E primero). Antes se
+    // ordenaban por RSSI y el robot se enganchaba al TP-Link porque llegaba mas
+    // fuerte: ese AP es otro router con otra subred y el robot quedaba fuera de
+    // la red donde esta la Pi. La prioridad manda sobre la senal.
     const int N = sizeof(NETS) / sizeof(NETS[0]);
-    bool used[8] = {};
-    int idx[8];
-    int cnt = 0;
-    int n = WiFi.scanNetworks();
-    while (cnt < N) {
-        int best = -1, bestRssi = -999;
-        for (int i = 0; i < n; i++)
-            for (int k = 0; k < N && k < 8; k++)
-                if (!used[k] && WiFi.SSID(i) == NETS[k].ssid && WiFi.RSSI(i) > bestRssi) {
-                    best = k;
-                    bestRssi = WiFi.RSSI(i);
-                }
-        if (best < 0) break;
-        used[best] = true;
-        idx[cnt++] = best;
-    }
-    WiFi.scanDelete();
-    for (int k = 0; k < N && k < 8; k++)
-        if (!used[k]) idx[cnt++] = k;  // las que no se ven, al final
-    for (int j = 0; j < cnt; j++) {
-        const Net& n2 = NETS[idx[j]];
+    for (int j = 0; j < N; j++) {
+        const Net& n2 = NETS[j];
         WiFi.begin(n2.ssid, n2.pass);
         unsigned long t0 = millis();
         while (WiFi.status() != WL_CONNECTED && millis() - t0 < 8000) delay(100);
@@ -265,7 +247,7 @@ static void otaBegin() {
 // Al arrancar se consulta el ultimo release de GitHub; si su tag es mayor que
 // FW_VERSION se descarga el asset GH_ASSET y se flashea. No hace falta cable ni
 // subir nada al dispositivo: basta publicar un release nuevo.
-#define FW_VERSION "1.31"
+#define FW_VERSION "1.32"
 #define GH_REPO "JesPezz/zyc0076-robot"
 #define GH_ASSET "firmware.bin"
 #define UNO_ASSET_HEX "uno.hex"   // sketch del UNO ya compilado
@@ -1097,7 +1079,7 @@ void loop() {
     static unsigned long lastHb = 0;
     if (millis() - lastHb > 30000) {
         lastHb = millis();
-        logf("hb %lus heap=%u wifi=%d modo=%d\n", millis() / 1000, (unsigned)ESP.getFreeHeap(), (int)WiFi.status(), g_modo);
+        logf("hb %lus heap=%u wifi=%d modo=%d %s ip=%s\n", millis() / 1000, (unsigned)ESP.getFreeHeap(), (int)WiFi.status(), g_modo, WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
     }
     delay(2);
 }
