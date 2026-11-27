@@ -17,6 +17,9 @@
 #include "esp_sleep.h"
 #include "web.h"
 #include <Preferences.h>  // copia del log a NVS cuando el arranque viene de un crash
+#include <strings.h>      // strncasecmp del handshake WebSocket
+#include <mbedtls/sha1.h>    // Sec-WebSocket-Accept (ya enlazado por el TLS)
+#include <mbedtls/base64.h>
 
 // ---------------------------------------------------------------- enlace UNO
 #define UNO_HDR 0xA5
@@ -247,7 +250,7 @@ static void otaBegin() {
 // Al arrancar se consulta el ultimo release de GitHub; si su tag es mayor que
 // FW_VERSION se descarga el asset GH_ASSET y se flashea. No hace falta cable ni
 // subir nada al dispositivo: basta publicar un release nuevo.
-#define FW_VERSION "1.33"
+#define FW_VERSION "1.34"
 #define GH_REPO "JesPezz/zyc0076-robot"
 #define GH_ASSET "firmware.bin"
 #define UNO_ASSET_HEX "uno.hex"   // sketch del UNO ya compilado
@@ -490,22 +493,180 @@ static void handleSens() {
     uiServer.send(200, "text/plain", buf);
 }
 
-static void handleCtrl() {
-    if (!uiServer.hasArg("o")) { uiServer.send(400, "text/plain", "falta o"); return; }
-    int o = uiServer.arg("o").toInt();
-    if (!validOrder(o)) { uiServer.send(400, "text/plain", "orden invalida"); return; }
+// Aplica una orden del cliente. La usan /c?o= y el WebSocket: el comportamiento
+// tiene que ser identico por los dos caminos.
+static void aplicarOrden(int o) {
     if (o >= O_M1 && o <= O_M4) {
         // Orden de modo: se manda UNA vez y el keepalive vuelve a O_STOP. Si se
         // reenviara cada 200 ms el UNO reentraria en el modo y no maniobraria.
         g_modo = o - O_M1;
         unoOrder((uint8_t)o);
         g_order = O_STOP;
-        uiServer.send(200, "text/plain", "ok");
         return;
     }
     g_remoteMs = millis();
     unoOrder((uint8_t)o);
+}
+
+static void handleCtrl() {
+    if (!uiServer.hasArg("o")) { uiServer.send(400, "text/plain", "falta o"); return; }
+    int o = uiServer.arg("o").toInt();
+    if (!validOrder(o)) { uiServer.send(400, "text/plain", "orden invalida"); return; }
+    aplicarOrden(o);
     uiServer.send(200, "text/plain", "ok");
+}
+
+// ------------------------------------------------ WebSocket de control (82)
+// Una conexion persistente en vez de una peticion HTTP por orden: el WebServer
+// atiende de una en una y el keepalive de la pagina (cada 250 ms) lo saturaba
+// hasta colgar el ESP32. Aqui el cliente manda "o=<orden>" y el robot empuja
+// "s=<dist>,<L>,<C>,<R>" cada 300 ms por la misma conexion, sin polling.
+// RFC 6455 minimo hecho a mano: no entra ninguna libreria nueva.
+// Sin watchdog a proposito: un reinicio a media OTA dejaria el UNO a medias, y
+// el estado se recupera cerrando y reabriendo la conexion.
+static WiFiServer wsServer(82);
+static WiFiClient wsCli;
+static uint8_t wsEstado = 0;      // 0 sin cliente, 1 handshake, 2 abierto
+static String wsReq;              // peticion HTTP del handshake
+static unsigned long wsT0 = 0;
+static uint8_t wsIn[192];         // una trama entrante (solo llegan ordenes)
+static size_t wsInLen = 0;
+static unsigned long wsLastPush = 0;
+
+static void wsCerrar() {
+    if (wsCli) wsCli.stop();
+    wsEstado = 0;
+    wsReq = "";
+    wsInLen = 0;
+}
+
+static void wsEnviar(uint8_t op, const char* txt) {
+    size_t n = strlen(txt);
+    if (!wsCli.connected() || n > 125) return;
+    uint8_t h[2] = {(uint8_t)(0x80 | op), (uint8_t)n};
+    wsCli.write(h, 2);
+    wsCli.write((const uint8_t*)txt, n);
+}
+
+// Valor de una cabecera HTTP (el nombre no distingue mayusculas).
+static String wsCabecera(const String& req, const char* nombre) {
+    size_t nl = strlen(nombre);
+    int i = 0, len = (int)req.length();
+    while (i < len) {
+        int e = req.indexOf('\n', i);
+        if (e < 0) e = len;
+        if (e - i > (int)nl && req[i + nl] == ':' && !strncasecmp(req.c_str() + i, nombre, nl)) {
+            String v = req.substring(i + nl + 1, e);
+            v.trim();
+            return v;
+        }
+        i = e + 1;
+    }
+    return String();
+}
+
+// 101 con Sec-WebSocket-Accept = base64(sha1(key + GUID del RFC 6455)).
+static void wsAceptar(const String& key) {
+    String src = key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+    static mbedtls_sha1_context ctx;
+    unsigned char sha[20], b64[40];
+    size_t olen = 0;
+    mbedtls_sha1_init(&ctx);
+    mbedtls_sha1_starts(&ctx);
+    mbedtls_sha1_update(&ctx, (const unsigned char*)src.c_str(), src.length());
+    mbedtls_sha1_finish(&ctx, sha);
+    if (mbedtls_base64_encode(b64, sizeof(b64), &olen, sha, sizeof(sha)) != 0) { wsCerrar(); return; }
+    String r = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
+               "Connection: Upgrade\r\nSec-WebSocket-Accept: ";
+    r += String((const char*)b64, olen);
+    r += "\r\n\r\n";
+    wsCli.write((const uint8_t*)r.c_str(), r.length());
+}
+
+// "o=<orden>" -> mismo camino que /c?o=
+static void wsOrden(const char* t) {
+    int o = -1;
+    if (strncmp(t, "o=", 2) == 0) o = atoi(t + 2);
+    if (o < 0 || !validOrder(o)) { wsEnviar(1, "err"); return; }
+    aplicarOrden(o);
+    wsEnviar(1, "ok");
+}
+
+// Consume una trama completa del buffer. Devuelve los bytes usados (0 = aun
+// falta trozo). El cliente siempre enmascara: si no, se cierra.
+static size_t wsTrama() {
+    size_t n = wsInLen;
+    if (n < 2) return 0;
+    if (!(wsIn[1] & 0x80)) { wsCerrar(); return n; }
+    uint8_t op = wsIn[0] & 0x0F;
+    size_t len = wsIn[1] & 0x7F, i = 2;
+    if (len == 126) {
+        if (n < 4) return 0;
+        len = ((size_t)wsIn[2] << 8) | wsIn[3];
+        i = 4;
+    } else if (len == 127 || len > sizeof(wsIn) - 6) {
+        wsCerrar();      // 64 bits: ni el WebView ni el APK lo mandan
+        return n;
+    }
+    if (n < i + 4 + len) return 0;
+    char t[64];
+    size_t k = 0;
+    for (size_t j = 0; j < len && k < sizeof(t) - 1; j++)
+        t[k++] = (char)(wsIn[i + 4 + j] ^ wsIn[i + (j & 3)]);
+    t[k] = 0;
+    if (op == 8) { wsEnviar(8, ""); wsCerrar(); return n; }
+    if (op == 1) wsOrden(t);
+    return i + 4 + len;
+}
+
+// Una vuelta del servidor: sin esperas, si no hay nada que hacer no toca el aire.
+static void wsPoll() {
+    if (wsEstado == 0) {
+        if (!wsServer.hasClient()) return;
+        wsCli = wsServer.accept();
+        if (!wsCli) return;
+        wsCli.setTimeout(20);    // una escritura a un cliente que no lee no congela el loop
+        wsEstado = 1;
+        wsReq = "";
+        wsInLen = 0;
+        wsT0 = millis();
+        return;
+    }
+    if (wsEstado == 1) {         // handshake repartido entre varias vueltas
+        // el handshake del WebView ronda los 500 B (User-Agent incluido): 1200
+        // deja sitio de sobra sin que un cliente pesado se lleve la memoria
+        while (wsCli.available() && wsReq.length() < 1200) {
+            wsReq += (char)wsCli.read();
+            if (wsReq.endsWith("\r\n\r\n")) break;
+        }
+        if (wsReq.endsWith("\r\n\r\n")) {
+            String key = wsCabecera(wsReq, "sec-websocket-key");
+            wsReq = "";
+            if (key.length() != 24) { wsCerrar(); return; }
+            wsAceptar(key);
+            wsEstado = 2;
+            wsLastPush = 0;
+        } else if (!wsCli.connected() || millis() - wsT0 > 3000) {
+            wsCerrar();
+        }
+        return;
+    }
+    // abierto: un solo cliente; si llega otro se descarta para no llenar la cola
+    if (wsServer.hasClient()) wsServer.accept().stop();
+    if (!wsCli.connected()) { wsCerrar(); return; }
+    while (wsCli.available() && wsInLen < sizeof(wsIn)) wsIn[wsInLen++] = (uint8_t)wsCli.read();
+    size_t usado;
+    while (wsEstado == 2 && (usado = wsTrama()) > 0) {
+        wsInLen -= usado;
+        memmove(wsIn, wsIn + usado, wsInLen);
+    }
+    if (wsEstado != 2) return;
+    if (millis() - wsLastPush >= 300) {
+        char b[48];
+        snprintf(b, sizeof(b), "s=%d,%d,%d,%d", g_distCm, g_line[0], g_line[1], g_line[2]);
+        wsEnviar(1, b);
+        wsLastPush = millis();
+    }
 }
 
 // GET /rst?ms=5000 -> mantiene el RESET del UNO en bajo (comprobar el cable con
@@ -1027,6 +1188,7 @@ static void httpBegin() {
     uiServer.on("/updateuno", HTTP_POST, unoOtaDone, unoOtaUpload);
     uiServer.on("/update", HTTP_POST, httpUpdateDone, httpUpdateUpload);
     uiServer.begin();
+    wsServer.begin();   // control por WebSocket (la pagina pasa de una conexion por orden a una sola)
 }
 
 // --------------------------------------------------------------- arduino api
@@ -1070,7 +1232,7 @@ void loop() {
     if (BP32.update()) processControllers();
     sonarRead();  // distancia del UNO (linea "D:<cm>")
 
-    if (WiFi.status() == WL_CONNECTED) { ArduinoOTA.handle(); uiServer.handleClient(); }
+    if (WiFi.status() == WL_CONNECTED) { ArduinoOTA.handle(); uiServer.handleClient(); wsPoll(); }
 
     // reafirma la ultima orden (el UNO la mantiene en bucle)
     static unsigned long last = 0;

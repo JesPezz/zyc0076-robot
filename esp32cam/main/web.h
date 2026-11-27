@@ -84,7 +84,14 @@ html,body{margin:0;height:100%;background:#101214;color:#eee;font:14px system-ui
 <script>
 var O={stop:0,fwd:92,back:163,left:149,right:106,ccw:172,cw:83,svl:230,svr:231,svc:232};
 var cur=-1,hud=document.getElementById('hud'),v=document.getElementById('v');
-function post(o){fetch('/c?o='+o,{cache:'no-store'})['catch'](function(){});}
+// Control por WebSocket (puerto 82): una sola conexion abierta en vez de una
+// peticion HTTP por orden, que es lo que colgaba el ESP32. Si no abre en 2 s o
+// falla, todo sigue por HTTP (/c?o= y /sens) exactamente como antes.
+var ws=null,wsOk=false;
+function post(o){
+  if(wsOk){try{ws.send('o='+o);return;}catch(e){wsOk=false;}}
+  fetch('/c?o='+o,{cache:'no-store'})['catch'](function(){});
+}
 function go(o){if(o===cur)return;cur=o;post(o);}
 setInterval(function(){if(cur>=0)post(cur);},250);
 
@@ -142,15 +149,29 @@ document.getElementById('slp').addEventListener('click',function(){
 });
 v.onload=function(){hud.textContent='camara ok';};
 v.onerror=function(){hud.textContent='error de camara';};
-// Sonar y sensores de linea: el UNO los manda por la UART y el ESP32 los publica en /sens.
+// Sonar y sensores de linea: con WebSocket llegan solos cada 300 ms ("s=...",
+// una sola conexion); en el fallback por HTTP se piden a /sens como siempre.
 var dst=document.getElementById('dst');
+function pintaSens(t){
+  var p=t.replace(/^s=/,'').split(',');
+  var d=(p[0]>=0)?(p[0]+' cm'):'--';
+  dst.textContent=(p.length>3 && p[1]>=0)?(d+' | L'+p[1]+' C'+p[2]+' R'+p[3]):d;
+}
 setInterval(function(){
-  fetch('/sens',{cache:'no-store'}).then(function(r){return r.text();}).then(function(t){
-    var p=t.split(',');
-    var d=(p[0]>=0)?(p[0]+' cm'):'--';
-    dst.textContent=(p.length>3 && p[1]>=0)?(d+' | L'+p[1]+' C'+p[2]+' R'+p[3]):d;
-  })['catch'](function(){});
+  if(wsOk)return;
+  fetch('/sens',{cache:'no-store'}).then(function(r){return r.text();}).then(pintaSens)['catch'](function(){});
 },1000);
+var wsT=setTimeout(function(){if(!wsOk&&ws){try{ws.close();}catch(e){}ws=null;}},2000);
+try{
+  ws=new WebSocket('ws://'+location.hostname+':82');
+  ws.onopen=function(){wsOk=true;clearTimeout(wsT);};
+  ws.onclose=function(){wsOk=false;};
+  ws.onerror=function(){wsOk=false;};
+  ws.onmessage=function(e){
+    var t=''+e.data;
+    if(t.indexOf('s=')===0)pintaSens(t);
+  };
+}catch(e){ws=null;}
 // Red del robot: con varios repetidores no hay forma de saber a cual se engancha
 fetch('/info',{cache:'no-store'}).then(function(r){return r.text();}).then(function(t){
   document.getElementById('net').textContent=t;
