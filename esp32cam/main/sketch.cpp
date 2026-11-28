@@ -226,9 +226,11 @@ static void camBegin() {
 // antes de la tarea de la camara). Antes, si ese intento fallaba, el robot se
 // quedaba SIN red hasta reiniciar: el latido imprimia wifi=6 e ip=0.0.0.0 y no
 // habia forma de entrar (pasaba a -65 dBm). Ahora loop() reintenta solo.
-#define WIFI_RETRY_MS 20000  // cada cuanto se prueba la siguiente red si no hay enlace
-static uint8_t g_netIdx = 0;   // red que probara el proximo reintento (cicla NETS[])
-static bool g_netUp = false;   // servidores ya levantados (arranque o reintento tardio)
+#define WIFI_RETRY_MS 30000     // cada cuanto se relanza el intento si no hay enlace
+#define WIFI_TRIES_PER_NET 3    // intentos en la MISMA red antes de pasar a la siguiente
+static uint8_t g_netIdx = 0;    // red que probara el proximo reintento (cicla NETS[])
+static uint8_t g_netTries = 0;  // intentos hechos en g_netIdx
+static bool g_netUp = false;    // servidores ya levantados (arranque o reintento tardio)
 
 static void wifiConnect() {
     WiFi.mode(WIFI_STA);
@@ -248,18 +250,28 @@ static void wifiConnect() {
     }
 }
 
-// No bloqueante: lanza la asociacion y vuelve. Si a los 20 s sigue sin enlace,
-// se prueba la siguiente red del ciclo. Asi un fallo en el arranque no deja al
-// robot sin red para siempre (bug hasta v1.34: solo se intentaba en setup()).
+// No bloqueante: lanza la asociacion y vuelve. Si a los 30 s sigue sin enlace,
+// se repite la MISMA red hasta 3 veces y solo entonces se pasa a la siguiente.
+// Asi un fallo en el arranque no deja al robot sin red para siempre (bug hasta
+// v1.34: solo se intentaba en setup()).
 static void wifiRetry() {
     static unsigned long last = 0;
     if (WiFi.status() == WL_CONNECTED || millis() - last < WIFI_RETRY_MS) return;
     last = millis();
-    const int N = sizeof(NETS) / sizeof(NETS[0]);
+    if (g_netTries >= WIFI_TRIES_PER_NET) {
+        g_netTries = 0;
+        g_netIdx = (g_netIdx + 1) % (sizeof(NETS) / sizeof(NETS[0]));
+    }
+    g_netTries++;
     const Net& n2 = NETS[g_netIdx];
-    g_netIdx = (g_netIdx + 1) % N;
+    // v1.38: sin disconnect/mode previos el driver no completa la asociacion al
+    // cambiar de SSID: rotaba de red cada 20 s y se quedaba en wifi=6 para siempre.
+    WiFi.disconnect();
+    WiFi.mode(WIFI_STA);
+    delay(100);
     WiFi.begin(n2.ssid, n2.pass);
-    Serial.printf("wifi: reintento con %s\n", n2.ssid);
+    Serial.printf("wifi: reintento %u/%d con %s\n", (unsigned)g_netTries,
+                  WIFI_TRIES_PER_NET, n2.ssid);
 }
 
 static void otaBegin() {
@@ -272,7 +284,7 @@ static void otaBegin() {
 // Al arrancar se consulta el ultimo release de GitHub; si su tag es mayor que
 // FW_VERSION se descarga el asset GH_ASSET y se flashea. No hace falta cable ni
 // subir nada al dispositivo: basta publicar un release nuevo.
-#define FW_VERSION "1.37"
+#define FW_VERSION "1.38"
 #define GH_REPO "JesPezz/zyc0076-robot"
 #define GH_ASSET "firmware.bin"
 #define UNO_ASSET_HEX "uno.hex"   // sketch del UNO ya compilado
@@ -378,7 +390,7 @@ static void otaDesdeRelease() {
     BP32.enableNewBluetoothConnections(false);  // el escaneo BT se come aire del WiFi
     Release rel;
     if (!releaseFetch(rel) || versionNum(rel.tag) <= versionNum(FW_VERSION)) {
-        Serial.printf("OTA: al dia (v%s <= v%s)\n", rel.tag.c_str(), FW_VERSION);
+        Serial.printf("OTA: al dia (%s <= v%s)\n", rel.tag.c_str(), FW_VERSION);
         BP32.enableNewBluetoothConnections(true);
         return;
     }
