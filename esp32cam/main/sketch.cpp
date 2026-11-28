@@ -222,6 +222,14 @@ static void camBegin() {
 }
 
 // ----------------------------------------------------------------- wifi/ota
+// v1.35: el primer intento se hace en setup() y bloquea (lwip debe estar listo
+// antes de la tarea de la camara). Antes, si ese intento fallaba, el robot se
+// quedaba SIN red hasta reiniciar: el latido imprimia wifi=6 e ip=0.0.0.0 y no
+// habia forma de entrar (pasaba a -65 dBm). Ahora loop() reintenta solo.
+#define WIFI_RETRY_MS 20000  // cada cuanto se prueba la siguiente red si no hay enlace
+static uint8_t g_netIdx = 0;   // red que probara el proximo reintento (cicla NETS[])
+static bool g_netUp = false;   // servidores ya levantados (arranque o reintento tardio)
+
 static void wifiConnect() {
     WiFi.mode(WIFI_STA);
     WiFi.setSleep(false);  // modem sleep anade ~100 ms de latencia al stream MJPEG
@@ -240,6 +248,20 @@ static void wifiConnect() {
     }
 }
 
+// No bloqueante: lanza la asociacion y vuelve. Si a los 20 s sigue sin enlace,
+// se prueba la siguiente red del ciclo. Asi un fallo en el arranque no deja al
+// robot sin red para siempre (bug hasta v1.34: solo se intentaba en setup()).
+static void wifiRetry() {
+    static unsigned long last = 0;
+    if (WiFi.status() == WL_CONNECTED || millis() - last < WIFI_RETRY_MS) return;
+    last = millis();
+    const int N = sizeof(NETS) / sizeof(NETS[0]);
+    const Net& n2 = NETS[g_netIdx];
+    g_netIdx = (g_netIdx + 1) % N;
+    WiFi.begin(n2.ssid, n2.pass);
+    Serial.printf("wifi: reintento con %s\n", n2.ssid);
+}
+
 static void otaBegin() {
     ArduinoOTA.setHostname(OTA_HOST);
     ArduinoOTA.setPassword(OTA_PASS);
@@ -250,7 +272,7 @@ static void otaBegin() {
 // Al arrancar se consulta el ultimo release de GitHub; si su tag es mayor que
 // FW_VERSION se descarga el asset GH_ASSET y se flashea. No hace falta cable ni
 // subir nada al dispositivo: basta publicar un release nuevo.
-#define FW_VERSION "1.34"
+#define FW_VERSION "1.35"
 #define GH_REPO "JesPezz/zyc0076-robot"
 #define GH_ASSET "firmware.bin"
 #define UNO_ASSET_HEX "uno.hex"   // sketch del UNO ya compilado
@@ -1217,6 +1239,7 @@ void setup() {
 
     wifiConnect();  // primero la red: lwip debe estar listo antes de la tarea de la camara
     if (WiFi.status() == WL_CONNECTED) {
+        g_netUp = true;
         tlsProbe();         // antes de la camara: aqui sobra heap
         otaBegin();
         httpBegin();
@@ -1231,6 +1254,17 @@ void setup() {
 void loop() {
     if (BP32.update()) processControllers();
     sonarRead();  // distancia del UNO (linea "D:<cm>")
+
+    // v1.35: si el arranque no encontro red, se reintenta aqui sin bloquear. Al
+    // primer enlace tardio hay que levantar los servidores, que en setup() no se
+    // arrancaron (si no, habria WiFi pero ni pagina ni OTA).
+    wifiRetry();
+    if (WiFi.status() == WL_CONNECTED && !g_netUp) {
+        g_netUp = true;
+        otaBegin();
+        httpBegin();
+        logf("wifi: enlace tardio %s ip=%s\n", WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
+    }
 
     if (WiFi.status() == WL_CONNECTED) { ArduinoOTA.handle(); uiServer.handleClient(); wsPoll(); }
 
